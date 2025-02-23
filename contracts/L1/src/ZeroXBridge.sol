@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-contract Counter {
-    uint256 public number;
+contract ZeroXBridge{
     address public admin;
 
-       // Events
     event WhitelistEvent(address indexed token);
     event DewhitelistEvent(address indexed token);
 
@@ -13,20 +11,11 @@ contract Counter {
 
     constructor(){
         admin = address(0x123);
-        //admin = msg.sender;
-    }
 
-    modifier onlyAdmin() {
+    }
+    modifier  onlyAdmin() {
         require(msg.sender == admin, "Only admin can perform this action");
-    
     _;
-    }
-    function setNumber(uint256 newNumber) public {
-        number = newNumber;
-    }
-
-    function increment() public {
-        number++;
     }
 
     function whitelistToken(address _token) public onlyAdmin {
@@ -39,6 +28,6 @@ contract Counter {
         emit DewhitelistEvent(_token);
     }
     function isWhitelisted(address _token) public view returns (bool) {
-    return whitelistedTokens[_token];
-}
+        return whitelistedTokens[_token];
+    }
 }
