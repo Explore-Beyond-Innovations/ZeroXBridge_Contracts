@@ -2,7 +2,8 @@
 pragma solidity ^0.8.20;
 
 // Chainlink price feed interface
-import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+// import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import "./interfaces/AggregatorV3Interface.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -23,6 +24,7 @@ contract ZeroXBridgeL1 is Ownable {
     mapping(address => address) public priceFeeds; // Maps token address to Chainlink price feed address
     address[] public supportedTokens; // List of token addresses, including address(0) for ETH
     mapping(address => uint8) public tokenDecimals; // Maps token address to its decimals
+    mapping(address => bool) public whitelistedTokens; // Maps token address to its whitelisting status
 
     using SafeERC20 for IERC20;
 

@@ -4,6 +4,6 @@
 [submodule "contracts/L1/lib/openzeppelin-contracts"]
 	path = contracts/L1/lib/openzeppelin-contracts
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
-[submodule "contracts/L1/lib/chainlink"]
-	path = contracts/L1/lib/chainlink
-	url = https://github.com/smartcontractkit/chainlink
+# [submodule "contracts/L1/lib/chainlink"]
+# 	path = contracts/L1/lib/chainlink
+# 	url = https://github.com/smartcontractkit/chainlink

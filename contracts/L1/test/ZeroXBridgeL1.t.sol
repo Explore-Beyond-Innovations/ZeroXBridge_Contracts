@@ -6,17 +6,38 @@ import {ZeroXBridgeL1} from "../src/ZeroXBridgeL1.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+// import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import "../src/interfaces/AggregatorV3Interface.sol";
 
 import {MockERC20} from "./mocks/MockERC20.sol";
 
-interface IGpsStatementVerifier {
-    function verifyProofAndRegister(
-        uint256[] calldata proofParams,
-        uint256[] calldata proof,
-        uint256[] calldata publicInputs,
-        uint256 cairoVerifierId
-    ) external returns (bool);
+contract ZeroXBridgeL1Test is Test {
+    ZeroXBridgeL1 public assetPricer;
+    MockERC20 public dai;
+    MockERC20 public usdc;
+    address public ethPriceFeed;
+    address public daiPriceFeed;
+    address public usdcPriceFeed;
+
+    MockGpsStatementVerifier public mockVerifier;
+    MockERC20 public token;
+
+    address public owner = address(0x1);
+    address public user1 = address(0x2);
+    address public user2 = address(0x3);
+    address public relayer = address(0x4);
+    address public nonRelayer = address(0x5);
+
+    uint256 public cairoVerifierId = 123456789;
+
+    uint256[] public proofParams;
+    uint256[] public proof;
+
+    address public admin;
+    address public token1;
+    address public token2;
+
+    // Removed duplicate contract declaration
 }
 
 contract MockGpsStatementVerifier is IGpsStatementVerifier {
@@ -315,6 +336,12 @@ contract ZeroXBridgeL1Test is Test {
         assetPricer.whitelistToken(token1);
 
         address nonAdmin = address(0x999);
+
+        vm.startPrank(nonAdmin);
+        vm.expectRevert("Only admin can perform this action");
+        assetPricer.dewhitelistToken(token1);
+        vm.stopPrank();
+    }
 
         vm.startPrank(nonAdmin);
         vm.expectRevert("Only admin can perform this action");
