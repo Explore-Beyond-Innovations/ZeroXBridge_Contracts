@@ -1,11 +1,8 @@
 use openzeppelin_utils::serde::SerializedAppend;
 use snforge_std::DeclareResultTrait;
 use starknet::{ContractAddress, contract_address_const};
-use snforge_std::{
-    cheat_caller_address, cheat_block_timestamp, declare, CheatSpan, ContractClassTrait,
-};
-// use snforge_std::{cheat_caller_address, declare, CheatSpan, ContractClassTrait};
-use l2::DAO::{IDAODispatcher, IDAODispatcherTrait, ProposalStatus};
+use snforge_std::{cheat_caller_address, declare, CheatSpan, ContractClassTrait, cheat_block_timestamp, start_cheat_block_timestamp, spy_events, EventSpyAssertionsTrait, Event};
+use l2::DAO::{DAO, IDAODispatcher, IDAODispatcherTrait, ProposalStatus};
 
 fn owner() -> ContractAddress {
     contract_address_const::<'owner'>()
@@ -247,3 +244,149 @@ fn test_tally_poll_votes_no_votes() {
     let proposal = dao_dispatcher.get_proposal(1);
     assert(proposal.status == ProposalStatus::Pending, 'Not in poll phase');
 }
+
+
+#[test]
+#[should_panic(expected: 'Not in voting phase')]
+fn test_tally_binding_votes_not_voting_phase(){
+    let xzb_token = contract_address_const::<'xzb_token'>();
+    let dao = deploy_dao(xzb_token);
+    create_proposal(dao, 1, 'Proposal 1'.into(), 1000, 2000);
+    let dao_dispatcher = IDAODispatcher { contract_address: dao };
+    
+    dao_dispatcher.tallyBindingVotes(1);
+}
+
+
+#[test]
+fn test_tally_binding_votes_rejected_threshold_met(){
+    let owner = owner();
+    let alice = alice();
+    let xzb_token = contract_address_const::<'xzb_token'>();
+    let dao = deploy_dao(xzb_token);
+    create_proposal(dao, 1, 'Proposal 1'.into(), 1000, 2000);
+    let dao_dispatcher = IDAODispatcher { contract_address: dao };
+
+    dao_dispatcher.start_poll(1);
+
+    cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
+    dao_dispatcher.vote_in_poll(1, false);
+    cheat_caller_address(dao, alice, CheatSpan::TargetCalls(1));
+    dao_dispatcher.vote_in_poll(1, false);
+
+    start_cheat_block_timestamp(dao, 1000);
+
+    let mut spy = spy_events();
+    dao_dispatcher.tallyBindingVotes(1);
+
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    dao,
+                    DAO::Event::BindingVoteResult(
+                        DAO::BindingVoteResult { 
+                            proposal_id: 1,
+                            approved: false,
+                            total_for: 1,
+                            total_against: 1
+                        }
+                    )
+                )
+            ]
+        );
+  
+    let proposal = dao_dispatcher.get_proposal(1);
+    assert(proposal.status == ProposalStatus::Rejected, 'Proposal was not rejected');
+}
+
+#[test]
+fn test_tally_binding_votes_rejected_threshold_not_met(){
+    let owner = owner();
+    let alice = alice();
+    let xzb_token = contract_address_const::<'xzb_token'>();
+    let dao = deploy_dao(xzb_token);
+    create_proposal(dao, 1, 'Proposal 1'.into(), 1000, 2000);
+    let dao_dispatcher = IDAODispatcher { contract_address: dao };
+
+    dao_dispatcher.start_poll(1);
+
+    cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
+    dao_dispatcher.vote_in_poll(1, false);
+
+    cheat_caller_address(dao, alice, CheatSpan::TargetCalls(1));
+    dao_dispatcher.vote_in_poll(1, true);
+
+    start_cheat_block_timestamp(dao, 2000);
+
+    let mut spy = spy_events();
+
+    dao_dispatcher.tallyBindingVotes(1);
+
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    dao,
+                    DAO::Event::BindingVoteResult(
+                        DAO::BindingVoteResult { 
+                            proposal_id: 1,
+                            approved: false,
+                            total_for: 1,
+                            total_against: 1
+                        }
+                    )
+                )
+            ]
+        );
+    
+
+    let proposal = dao_dispatcher.get_proposal(1);
+    assert(proposal.status == ProposalStatus::Rejected, 'Proposal was not rejected');
+}
+
+#[test]
+fn test_tally_binding_votes_approved(){
+    let owner = owner();
+    let alice = alice();
+    let xzb_token = contract_address_const::<'xzb_token'>();
+    let dao = deploy_dao(xzb_token);
+    create_proposal(dao, 1, 'Proposal 1'.into(), 1000, 2000);
+    let dao_dispatcher = IDAODispatcher { contract_address: dao };
+
+    dao_dispatcher.start_poll(1);
+
+
+    cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
+    dao_dispatcher.vote_in_poll(1, true);
+
+    cheat_caller_address(dao, alice, CheatSpan::TargetCalls(1));
+    dao_dispatcher.vote_in_poll(1, true);
+
+    start_cheat_block_timestamp(dao, 1000);
+
+    let mut spy = spy_events();
+
+    dao_dispatcher.tallyBindingVotes(1);
+
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    dao,
+                    DAO::Event::BindingVoteResult(
+                        DAO::BindingVoteResult { 
+                            proposal_id: 1,
+                            approved: false,
+                            total_for: 1,
+                            total_against: 1
+                        }
+                    )
+                )
+            ]
+        );
+
+    let proposal = dao_dispatcher.get_proposal(1);
+    assert(proposal.status == ProposalStatus::Approved, 'Proposal was not approved');
+}
+
