@@ -37,12 +37,14 @@ pub trait IDAO<TContractState> {
         poll_duration: u64,
         voting_duration: u64,
     );
+    fn start_poll(ref self: TContractState, proposal_id: u256);
     fn tally_poll_votes(ref self: TContractState, proposal_id: u256);
     fn tallyBindingVotes(ref self: TContractState, proposal_id: u256);
 }
 
 #[starknet::contract]
 pub mod DAO {
+    use starknet::event::EventEmitter;
     use starknet::storage::StorageMapWriteAccess;
     use starknet::storage::StorageMapReadAccess;
     use starknet::ContractAddress;
@@ -67,6 +69,7 @@ pub mod DAO {
     #[derive(Drop, starknet::Event)]
     pub enum Event {
         PollVoted: PollVoted,
+        PollStarted: PollStarted,
         PollResultUpdated: PollResultUpdated,
         BindingVoteResult: BindingVoteResult
     }
@@ -79,6 +82,13 @@ pub mod DAO {
         pub voter: ContractAddress,
         pub support: bool,
         pub vote_weight: u256,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct PollStarted {
+        #[key]
+        pub proposal_id: u256,
+        pub timestamp: u64,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -171,6 +181,21 @@ pub mod DAO {
             };
             self.proposals.write(proposal_id, proposal);
             self.proposal_exists.write(proposal_id, true)
+        }
+
+        fn start_poll(ref self: ContractState, proposal_id: u256) {
+            let mut proposal = self._validate_proposal_exists(proposal_id);
+            assert(proposal.status == ProposalStatus::Pending, 'Poll phase already started');
+            let current_time = get_block_timestamp();
+            assert(current_time < proposal.poll_end_time, 'Poll phase ended');
+            proposal.status = ProposalStatus::PollActive;
+            self.proposals.write(proposal_id, proposal);
+            self
+                .emit(
+                    Event::PollStarted(
+                        PollStarted { proposal_id, timestamp: get_block_timestamp() },
+                    ),
+                );
         }
 
         fn tally_poll_votes(ref self: ContractState, proposal_id: u256){
