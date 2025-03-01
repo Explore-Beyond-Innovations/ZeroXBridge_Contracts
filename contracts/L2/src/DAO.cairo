@@ -38,6 +38,7 @@ pub trait IDAO<TContractState> {
         voting_duration: u64,
     );
     fn tally_poll_votes(ref self: TContractState, proposal_id: u256);
+    fn tallyBindingVotes(ref self: TContractState, proposal_id: u256);
 }
 
 #[starknet::contract]
@@ -49,7 +50,7 @@ pub mod DAO {
     use starknet::get_block_timestamp;
     use core::traits::Into;
     use core::array::ArrayTrait;
-    use core::starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess, Map};
+    use core::starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess, StoragePathEntry, Map};
     use super::{Proposal, ProposalStatus};
     use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use core::panic_with_felt252;
@@ -67,6 +68,7 @@ pub mod DAO {
     pub enum Event {
         PollVoted: PollVoted,
         PollResultUpdated: PollResultUpdated,
+        BindingVoteResult: BindingVoteResult
     }
 
     #[derive(Drop, starknet::Event)]
@@ -86,6 +88,15 @@ pub mod DAO {
         pub total_for: u256,
         pub total_against: u256,
         pub new_status: felt252,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct BindingVoteResult {
+        #[key]
+        pub proposal_id: u256,
+        pub approved: bool,
+        pub total_for: u256,
+        pub total_against: u256,
     }
 
     #[constructor]
@@ -156,13 +167,13 @@ pub mod DAO {
                 voting_end_time: current_time + poll_duration + voting_duration,
                 vote_for: 0.into(),
                 vote_against: 0.into(),
-                status: ProposalStatus::Pending,
+                status: ProposalStatus::PollActive,
             };
             self.proposals.write(proposal_id, proposal);
             self.proposal_exists.write(proposal_id, true)
         }
 
-        fn tally_poll_votes(ref self: ContractState, proposal_id: u256) {
+        fn tally_poll_votes(ref self: ContractState, proposal_id: u256){
             let mut proposal = self._validate_proposal_exists(proposal_id);
 
             if proposal.status != ProposalStatus::PollActive {
@@ -190,6 +201,7 @@ pub mod DAO {
                             },
                         ),
                     );
+
             } else if total_against >= threshold {
                 proposal.status = ProposalStatus::PollFailed;
                 self.proposals.write(proposal_id, proposal);
@@ -206,6 +218,50 @@ pub mod DAO {
                             },
                         ),
                     );
+            }
+        }
+
+        fn tallyBindingVotes(ref self: ContractState, proposal_id: u256){
+            //verifies id validity
+            let mut proposal = self._validate_proposal_exists(proposal_id);
+            
+            let votes_for = proposal.vote_for;
+            let votes_against = proposal.vote_against;
+            let threshold = 2;
+
+            //verifies it is passed the poll phase
+            assert(proposal.status == ProposalStatus::PollPassed, 'Not in voting phase');
+
+            //verifies threshold requirement
+            if votes_for >= threshold{
+                self.proposals.entry(proposal_id).status.write(ProposalStatus::Approved);
+                self.emit(
+                    BindingVoteResult {
+                        proposal_id: proposal_id,
+                        approved: true, 
+                        total_for: votes_for, 
+                        total_against: votes_against 
+                    });
+            }else if votes_against >= threshold{
+                self.proposals.entry(proposal_id).status.write(ProposalStatus::Rejected);
+                self.emit(
+                    BindingVoteResult {
+                        proposal_id: proposal_id,
+                        approved: false, 
+                        total_for: votes_for, 
+                        total_against: votes_against 
+                    });
+            }else{
+                if get_block_timestamp() > proposal.voting_end_time{
+                    self.proposals.entry(proposal_id).status.write(ProposalStatus::Rejected);
+                self.emit(
+                    BindingVoteResult {
+                        proposal_id: proposal_id,
+                        approved: false, 
+                        total_for: votes_for, 
+                        total_against: votes_against 
+                    });
+                }
             }
         }
     }
@@ -242,5 +298,7 @@ pub mod DAO {
             }
             self.proposals.write(proposal_id, proposal);
         }
+
+        
     }
 }
