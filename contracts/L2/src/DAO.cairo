@@ -177,7 +177,7 @@ pub mod DAO {
                 voting_end_time: current_time + poll_duration + voting_duration,
                 vote_for: 0.into(),
                 vote_against: 0.into(),
-                status: ProposalStatus::PollActive,
+                status: ProposalStatus::Pending,
             };
             self.proposals.write(proposal_id, proposal);
             self.proposal_exists.write(proposal_id, true)

@@ -1,9 +1,8 @@
 use openzeppelin_utils::serde::SerializedAppend;
 use snforge_std::DeclareResultTrait;
 use starknet::{ContractAddress, contract_address_const};
-use snforge_std::{cheat_caller_address, declare, CheatSpan, ContractClassTrait, start_cheat_block_timestamp, spy_events, EventSpyAssertionsTrait,EventSpyTrait,Event};
-use testing_events::contract::{SpyEventsChecker, ISpyEventsCheckerDispatcher, ISpyEventsCheckerDispatcherTrait};
-use l2::DAO::{IDAODispatcher, IDAODispatcherTrait, ProposalStatus};
+use snforge_std::{cheat_caller_address, declare, CheatSpan, ContractClassTrait, cheat_block_timestamp, start_cheat_block_timestamp, spy_events, EventSpyAssertionsTrait, Event};
+use l2::DAO::{DAO, IDAODispatcher, IDAODispatcherTrait, ProposalStatus};
 
 fn owner() -> ContractAddress {
     contract_address_const::<'owner'>()
@@ -268,7 +267,7 @@ fn test_tally_binding_votes_rejected_threshold_met(){
     create_proposal(dao, 1, 'Proposal 1'.into(), 1000, 2000);
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
 
-    
+    dao_dispatcher.start_poll(1);
 
     cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
     dao_dispatcher.vote_in_poll(1, false);
@@ -282,11 +281,11 @@ fn test_tally_binding_votes_rejected_threshold_met(){
 
     spy
         .assert_emitted(
-            @array![ // Ad. 2
+            @array![
                 (
                     dao,
-                    SpyEventsChecker::Event::BindingVoteResult(
-                        SpyEventsChecker::BindingVoteResult { 
+                    DAO::Event::BindingVoteResult(
+                        DAO::BindingVoteResult { 
                             proposal_id: 1,
                             approved: false,
                             total_for: 1,
@@ -310,6 +309,8 @@ fn test_tally_binding_votes_rejected_threshold_not_met(){
     create_proposal(dao, 1, 'Proposal 1'.into(), 1000, 2000);
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
 
+    dao_dispatcher.start_poll(1);
+
     cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
     dao_dispatcher.vote_in_poll(1, false);
 
@@ -324,11 +325,11 @@ fn test_tally_binding_votes_rejected_threshold_not_met(){
 
     spy
         .assert_emitted(
-            @array![ // Ad. 2
+            @array![
                 (
                     dao,
-                    SpyEventsChecker::Event::BindingVoteResult(
-                        SpyEventsChecker::BindingVoteResult { 
+                    DAO::Event::BindingVoteResult(
+                        DAO::BindingVoteResult { 
                             proposal_id: 1,
                             approved: false,
                             total_for: 1,
@@ -353,6 +354,8 @@ fn test_tally_binding_votes_approved(){
     create_proposal(dao, 1, 'Proposal 1'.into(), 1000, 2000);
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
 
+    dao_dispatcher.start_poll(1);
+
 
     cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
     dao_dispatcher.vote_in_poll(1, true);
@@ -368,11 +371,11 @@ fn test_tally_binding_votes_approved(){
 
     spy
         .assert_emitted(
-            @array![ // Ad. 2
+            @array![
                 (
                     dao,
-                    SpyEventsChecker::Event::BindingVoteResult(
-                        SpyEventsChecker::BindingVoteResult { 
+                    DAO::Event::BindingVoteResult(
+                        DAO::BindingVoteResult { 
                             proposal_id: 1,
                             approved: false,
                             total_for: 1,
