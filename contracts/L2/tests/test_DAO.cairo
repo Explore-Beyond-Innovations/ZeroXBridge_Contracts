@@ -371,3 +371,17 @@ fn test_proposal_id_increment() {
     assert(proposal_2.id == 2, 'Second proposal ID should be 2');
 }
 
+
+#[test]
+fn test_vote() {
+    let alice = alice();
+    let xzb_token = contract_address_const::<'xzb_token'>();
+    let dao = deploy_dao(xzb_token);
+    create_proposal(dao, 1, 'Proposal 1'.into(), 1, 2000); // Short poll duration
+
+    let dao_dispatcher = IDAODispatcher { contract_address: dao };
+    cheat_caller_address(dao, alice, CheatSpan::TargetCalls(3));
+    dao_dispatcher.moveProposal(1);
+    // Simulate time passing
+    dao_dispatcher.castBindingVote(1, true);
+}
