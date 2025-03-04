@@ -191,7 +191,6 @@ fn test_start_poll_after_poll_end_should_fail() {
 }
 
 #[test]
-#[should_panic(expected: 'Not in poll phase')]
 fn test_tally_poll_votes_passed() {
     let owner = owner();
     let alice = alice();
@@ -201,19 +200,32 @@ fn test_tally_poll_votes_passed() {
     create_proposal(dao, 1, 'Proposal 1'.into(), 1000, 2000);
 
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
+
+    // Start the poll
+    cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
+    dao_dispatcher.start_poll(1);
+
+    // Simulate voting
     cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
     dao_dispatcher.vote_in_poll(1, true);
 
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(1));
     dao_dispatcher.vote_in_poll(1, true);
 
-    dao_dispatcher.tally_poll_votes(200);
-    let proposal = dao_dispatcher.get_proposal(2);
+    // Ensure the poll is still active
+    cheat_block_timestamp(
+        dao, 500, CheatSpan::TargetCalls(1),
+    ); // Simulate time within the poll duration
+
+    // Tally votes
+    dao_dispatcher.tally_poll_votes(1);
+
+    // Verify the proposal status
+    let proposal = dao_dispatcher.get_proposal(1);
     assert(proposal.status == ProposalStatus::PollPassed, 'Proposal should be passed');
 }
 
 #[test]
-#[should_panic(expected: 'Not in poll phase')]
 fn test_tally_poll_votes_defeated() {
     let owner = owner();
     let alice = alice();
@@ -223,13 +235,26 @@ fn test_tally_poll_votes_defeated() {
 
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
 
+    // Start the poll
+    cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
+    dao_dispatcher.start_poll(1);
+
+    // Simulate voting
     cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
     dao_dispatcher.vote_in_poll(1, false);
 
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(1));
     dao_dispatcher.vote_in_poll(1, false);
 
+    // Ensure the poll is still active
+    cheat_block_timestamp(
+        dao, 500, CheatSpan::TargetCalls(1),
+    ); // Simulate time within the poll duration
+
+    // Tally votes
     dao_dispatcher.tally_poll_votes(1);
+
+    // Verify the proposal status
     let proposal = dao_dispatcher.get_proposal(1);
     assert(proposal.status == ProposalStatus::PollFailed, 'Proposal should be defeated');
 }
@@ -244,7 +269,13 @@ fn test_tally_poll_votes_not_in_poll_phase() {
 
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
     cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
+    dao_dispatcher.start_poll(1);
+
+    cheat_caller_address(dao, owner, CheatSpan::TargetCalls(1));
     dao_dispatcher.vote_in_poll(1, true);
+
+    // Simulate time passing
+    cheat_block_timestamp(dao, 1001, CheatSpan::TargetCalls(1));
 
     dao_dispatcher.tally_poll_votes(1);
 }
@@ -257,6 +288,9 @@ fn test_tally_poll_votes_no_votes() {
     create_proposal(dao, 1, 'Proposal 1'.into(), 1000, 2000);
 
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
+
+    cheat_caller_address(dao, owner(), CheatSpan::TargetCalls(1));
+    dao_dispatcher.start_poll(1);
 
     dao_dispatcher.tally_poll_votes(1);
     let proposal = dao_dispatcher.get_proposal(1);
