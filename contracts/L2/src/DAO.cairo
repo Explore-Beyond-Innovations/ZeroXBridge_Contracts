@@ -1,5 +1,11 @@
 use core::starknet::ContractAddress;
 
+// Define the ExecutiveAction interface
+#[starknet::interface]
+pub trait IExecutiveAction<TContractState> {
+    fn execute(ref self: TContractState);
+}
+
 #[derive(Drop, Serde, Copy, starknet::Store, PartialEq)]
 #[allow(starknet::store_no_default_variant)]
 pub enum ProposalStatus {
@@ -7,6 +13,7 @@ pub enum ProposalStatus {
     PollActive,
     PollPassed,
     PollFailed,
+    BindingVoteActive,
     Approved,
     Executed,
     Rejected,
@@ -22,7 +29,8 @@ pub struct Proposal {
     pub voting_end_time: u64,
     pub vote_for: u256,
     pub vote_against: u256,
-    pub status: ProposalStatus // Use ProposalStatus enum instead of u8
+    pub status: ProposalStatus,
+    pub executive_action_address: ContractAddress,
 }
 
 #[derive(Drop, Serde, Copy, starknet::Store)]
@@ -57,6 +65,13 @@ pub trait IDAO<TContractState> {
 
     // move proposal to voting phase
     fn moveProposal(ref self: TContractState, proposal_id: u256);
+
+    fn update_proposal_status(
+        ref self: TContractState, proposal_id: u256, new_status: ProposalStatus,
+    );
+    fn startBindingVote(
+        ref self: TContractState, proposal_id: u256, execute_action_address: ContractAddress,
+    );
 }
 
 #[starknet::contract]
@@ -64,7 +79,7 @@ pub mod DAO {
     use starknet::event::EventEmitter;
     use starknet::storage::StorageMapWriteAccess;
     use starknet::storage::StorageMapReadAccess;
-    use starknet::ContractAddress;
+    use starknet::{ContractAddress, contract_address_const};
     use starknet::get_caller_address;
     use starknet::get_block_timestamp;
     use core::traits::Into;
@@ -96,6 +111,7 @@ pub mod DAO {
         PollStarted: PollStarted,
         PollResultUpdated: PollResultUpdated,
         BindingVoteCast: BindingVoteCast,
+        BindingVoteStarted: BindingVoteStarted,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -145,6 +161,14 @@ pub mod DAO {
         pub new_status: felt252,
     }
 
+    #[derive(Drop, starknet::Event)]
+    pub struct BindingVoteStarted {
+        #[key]
+        pub proposal_id: u256,
+        pub executive_action_address: ContractAddress,
+        pub timestamp: u64,
+    }
+
     #[constructor]
     fn constructor(ref self: ContractState, xzb_token_address: ContractAddress) {
         self.xzb_token.write(xzb_token_address);
@@ -153,14 +177,26 @@ pub mod DAO {
 
     #[abi(embed_v0)]
     impl DAOImpl of super::IDAO<ContractState> {
+        // for testing purposes only
+        fn update_proposal_status(
+            ref self: ContractState, proposal_id: u256, new_status: ProposalStatus,
+        ) {
+            let mut proposal = self.proposals.read(proposal_id);
+            proposal.status = new_status;
+            self.proposals.write(proposal_id, proposal);
+        }
+
         fn castBindingVote(ref self: ContractState, proposal_id: u256, support: bool) {
             let caller = get_caller_address();
             let binding_vote_proposal = self.bindingVoteProposals.read(proposal_id);
             let bindingVoteCasted = self.bindingVoteCasted.read((proposal_id, caller));
+
             assert!(binding_vote_proposal == true, "Proposal not in voting phase");
             assert!(bindingVoteCasted == false, "Binding Vote Already casted");
+
             let vote_weight = self._get_voter_weight(caller);
             assert(vote_weight > 0, 'No voting power');
+
             let oldBindingVotesCountMap = self.bindingVotesCountMap.read(proposal_id);
 
             let newBindingVotesCountMap = self
@@ -184,6 +220,7 @@ pub mod DAO {
                 )
         }
 
+        // This function is deprecated. Use startBindingVote() instead.
         fn moveProposal(ref self: ContractState, proposal_id: u256) {
             self.bindingVoteProposals.write(proposal_id, true);
         }
@@ -250,6 +287,7 @@ pub mod DAO {
                 vote_for: 0.into(),
                 vote_against: 0.into(),
                 status: ProposalStatus::Pending,
+                executive_action_address: contract_address_const::<0x0>(),
             };
             self.proposals.write(proposal_id, proposal);
             self.proposal_exists.write(proposal_id, true)
@@ -280,6 +318,7 @@ pub mod DAO {
                 vote_for: 0.into(),
                 vote_against: 0.into(),
                 status: ProposalStatus::Pending,
+                executive_action_address: contract_address_const::<0x0>(),
             };
 
             self.proposals.write(proposal_id, proposal);
@@ -359,6 +398,38 @@ pub mod DAO {
                         ),
                     );
             }
+        }
+
+        fn startBindingVote(
+            ref self: ContractState, proposal_id: u256, execute_action_address: ContractAddress,
+        ) {
+            // Verify proposal eligibility
+            let mut proposal = self._validate_proposal_exists(proposal_id);
+            assert(proposal.status == ProposalStatus::PollPassed, 'Proposal not in passed state');
+
+            // Update proposal status
+            proposal.status = ProposalStatus::BindingVoteActive;
+
+            // Record executive action address
+            proposal.executive_action_address = execute_action_address;
+
+            self.proposals.write(proposal_id, proposal);
+            self.bindingVoteProposals.write(proposal_id, true);
+
+            // Initialize binding vote data for this proposal
+            let binding_vote_data = BindingVoteData { votesFor: 0, votesAgainst: 0 };
+            self.bindingVotesCountMap.write(proposal_id, binding_vote_data);
+
+            self
+                .emit(
+                    Event::BindingVoteStarted(
+                        BindingVoteStarted {
+                            proposal_id: proposal_id,
+                            executive_action_address: execute_action_address,
+                            timestamp: get_block_timestamp(),
+                        },
+                    ),
+                );
         }
     }
 
