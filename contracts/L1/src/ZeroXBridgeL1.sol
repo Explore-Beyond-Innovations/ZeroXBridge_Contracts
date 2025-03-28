@@ -6,6 +6,7 @@ import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.so
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 interface IGpsStatementVerifier {
     function verifyProofAndRegister(
@@ -47,10 +48,19 @@ contract ZeroXBridgeL1 is Ownable {
     // Whitelisted tokens mapping
     mapping(address => bool) public whitelistedTokens;
 
+    // Maps Ethereum address to Starknet pub key
+    mapping(address => uint256) public userRecord;
+
+    //Starknet curve constants
+    uint256 private constant K_BETA = 0x6f21413efbe40de150e596d72f7a8c5609ad26c15c915c1f4cdfcb99cee9e89;
+    uint256 private constant K_MODULUS = 0x800000000000011000000000000000000000000000000000000000000000001;
+
     // Cairo program hash that corresponds to the burn verification program
     uint256 public cairoVerifierId;
 
     IERC20 public claimableToken;
+
+    using ECDSA for bytes32;
 
     // Events
     event FundsUnlocked(address indexed user, uint256 amount, bytes32 commitmentHash);
@@ -60,6 +70,7 @@ contract ZeroXBridgeL1 is Ownable {
     event WhitelistEvent(address indexed token);
     event DewhitelistEvent(address indexed token);
     event DepositEvent(address indexed token, uint256 amount, address indexed user, bytes32 commitmentHash);
+    event UserRegistered(address indexed user, uint256 starknetPubKey);
 
     constructor(
         address _gpsVerifier,
@@ -76,6 +87,11 @@ contract ZeroXBridgeL1 is Ownable {
 
     modifier onlyAdmin() {
         require(msg.sender == admin, "Only admin can perform this action");
+        _;
+    }
+
+    modifier onlyRegistered() {
+        require(userRecord[msg.sender] != 0, "ZeroXBridge: User not registered");
         _;
     }
 
@@ -189,7 +205,7 @@ contract ZeroXBridgeL1 is Ownable {
      * @dev Allows users to claim their full unlocked tokens
      * @notice Users can only claim the full amount, partial claims are not allowed
      */
-    function claim_tokens() external {
+    function claim_tokens() external onlyRegistered {
         uint256 amount = claimableFunds[msg.sender];
         require(amount > 0, "ZeroXBridge: No tokens to claim");
 
@@ -233,7 +249,7 @@ contract ZeroXBridgeL1 is Ownable {
      * @param user The address that will receive the bridged tokens on L2
      * @return Returns the generated commitment hash for verification on L2
      */
-    function deposit_asset(address token, uint256 amount, address user) external returns (bytes32) {
+    function deposit_asset(address token, uint256 amount, address user) external onlyRegistered returns (bytes32) {
         // Verify token is whitelisted
         require(whitelistedTokens[token], "ZeroXBridge: Token not whitelisted");
         require(amount > 0, "ZeroXBridge: Amount must be greater than zero");
@@ -258,5 +274,71 @@ contract ZeroXBridgeL1 is Ownable {
         emit DepositEvent(token, amount, user, commitmentHash);
 
         return commitmentHash;
+    }
+
+    /**
+     * @dev Using Starknet Curve constants (α and β) for y^2 = x^3 + α.x + β (mod P)
+     * @param signature The user signature
+     * @param starknetPubKey user starknet public key
+     */
+    function registerUser(bytes calldata signature, uint256 starknetPubKey) external {
+        require(isValidStarknetPublicKey(starknetPubKey), "ZeroXBridge: Invalid Starknet public key");
+
+        address recoveredSigner = recoverSigner(msg.sender, signature, starknetPubKey);
+        require(recoveredSigner == msg.sender, "ZeroXBridge: Invalid signature");
+
+        userRecord[msg.sender] = starknetPubKey;
+
+        emit UserRegistered(msg.sender, starknetPubKey);
+    }
+
+    /**
+     * @notice Checks if a Starknet public key belongs to the Starknet elliptic curve.
+     * @param starknetPubKey user starknet public key
+     * @return isValid True if the key is valid.
+     */
+    function isValidStarknetPublicKey(uint256 starknetPubKey) internal view returns (bool) {
+        uint256 xCubed = mulmod(mulmod(starknetPubKey, starknetPubKey, K_MODULUS), starknetPubKey, K_MODULUS);
+        return isQuadraticResidue(addmod(addmod(xCubed, starknetPubKey, K_MODULUS), K_BETA, K_MODULUS));
+    }
+
+    function fieldPow(uint256 base, uint256 exponent) internal view returns (uint256) {
+        (bool success, bytes memory returndata) =
+            address(5).staticcall(abi.encode(0x20, 0x20, 0x20, base, exponent, K_MODULUS));
+        require(success, string(returndata));
+        return abi.decode(returndata, (uint256));
+    }
+
+    function isQuadraticResidue(uint256 fieldElement) private view returns (bool) {
+        return 1 == fieldPow(fieldElement, ((K_MODULUS - 1) / 2));
+    }
+
+    /**
+     * @dev Recovers the signer's address from a signature.
+     * @param ethAddress The Ethereum address of the user.
+     * @param signature The user's signature.
+     * @param starknetPubKey The Starknet public key.
+     * @return The recovered Ethereum address.
+     */
+    function recoverSigner(address ethAddress, bytes calldata signature, uint256 starknetPubKey)
+        internal
+        pure
+        returns (address)
+    {
+        require(ethAddress != address(0), "Invalid ethAddress");
+        require(signature.length == 65, "Invalid signature length");
+
+        bytes32 messageHash = keccak256(abi.encodePacked("UserRegistration", ethAddress, starknetPubKey));
+
+        bytes memory sig = signature;
+        bytes32 r;
+        bytes32 s;
+        uint8 v = uint8(sig[64]);
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+        }
+
+        return ecrecover(messageHash, v, r, s);
     }
 }

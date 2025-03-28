@@ -1,4 +1,5 @@
 use core::starknet::ContractAddress;
+use starknet::storage::Map;
 
 // Define the ExecutiveAction interface
 #[starknet::interface]
@@ -33,10 +34,40 @@ pub struct Proposal {
     pub executive_action_address: ContractAddress,
 }
 
-#[derive(Drop, Serde, Copy, starknet::Store)]
-struct BindingVoteData {
-    pub votesFor: u32,
-    pub votesAgainst: u32,
+#[derive(Drop, Copy, Serde, Default, PartialEq, starknet::Store)]
+pub enum BindingVote {
+    For: u256,
+    Against: u256,
+    #[default]
+    None,
+}
+
+#[generate_trait]
+pub impl BindingVoteImpl of BindingVoteTrait {
+    // Converts the BindingVote Enum to an Optional (support, vote_weight)
+    // used for retrieving the binding vote from the voter
+    // returns none if the voter didn't participate
+    fn get_vote(self: @BindingVote) -> Option<(bool, u256)> {
+        let mut return_val = Option::None;
+        if let BindingVote::For(val) = self {
+            return_val = Option::Some((true, *val));
+        }
+
+        if let BindingVote::Against(val) = self {
+            return_val = Option::Some((false, *val));
+        }
+
+        return_val
+    }
+}
+
+#[starknet::storage_node]
+pub struct ProposalBindingData {
+    pub in_phase: bool,
+    pub votes_count: u256, // total weight
+    pub voters_count: u256, // total voters
+    pub voters: Map<ContractAddress, BindingVote>,
+    pub votes: (u256, u256) // (for, against)
 }
 
 #[starknet::interface]
@@ -61,17 +92,18 @@ pub trait IDAO<TContractState> {
     fn start_poll(ref self: TContractState, proposal_id: u256);
     fn tally_poll_votes(ref self: TContractState, proposal_id: u256);
 
-    fn castBindingVote(ref self: TContractState, proposal_id: u256, support: bool);
+    fn cast_binding_vote(ref self: TContractState, proposal_id: u256, support: bool);
 
     // move proposal to voting phase
-    fn moveProposal(ref self: TContractState, proposal_id: u256);
+    fn move_proposal(ref self: TContractState, proposal_id: u256);
 
     fn update_proposal_status(
         ref self: TContractState, proposal_id: u256, new_status: ProposalStatus,
     );
-    fn startBindingVote(
+    fn start_binding_vote(
         ref self: TContractState, proposal_id: u256, execute_action_address: ContractAddress,
     );
+    fn tally_binding_votes(ref self: TContractState, proposal_id: u256);
 }
 
 #[starknet::contract]
@@ -84,10 +116,13 @@ pub mod DAO {
     use starknet::get_block_timestamp;
     use core::traits::Into;
     use core::array::ArrayTrait;
-    use core::starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess, Map};
-    use super::{Proposal, ProposalStatus, BindingVoteData};
+    use core::starknet::storage::{
+        StoragePointerReadAccess, StoragePointerWriteAccess, Map, StoragePathEntry,
+    };
+    use super::{Proposal, ProposalStatus, ProposalBindingData, BindingVote, BindingVoteTrait};
     use openzeppelin_token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use core::panic_with_felt252;
+
 
     #[storage]
     struct Storage {
@@ -96,11 +131,11 @@ pub mod DAO {
         has_voted: Map<(u256, ContractAddress), bool>,
         proposal_exists: Map<u256, bool>,
         next_proposal_id: u256,
-        pollVotesCount: u32,
-        bindingVoteProposals: Map<u256, bool>, // proposal, inVotingPhase
-        bindingVoteCasted: Map<(u256, ContractAddress), bool>, // (proposal id, caller), hasVoted 
-        bindingVotesCount: u256, // total binding votes for a proposal
-        bindingVotesCountMap: Map<u256, BindingVoteData> //proposal id to the binding vote data
+        poll_votes_count: u32,
+        proposal_binding_data: Map<
+            u256, ProposalBindingData,
+        >, // proposal id, proposal binding vote data
+        binding_vote_threshold: u256,
     }
 
     #[event]
@@ -112,6 +147,7 @@ pub mod DAO {
         PollResultUpdated: PollResultUpdated,
         BindingVoteCast: BindingVoteCast,
         BindingVoteStarted: BindingVoteStarted,
+        BindingVoteResult: BindingVoteResult,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -169,10 +205,22 @@ pub mod DAO {
         pub timestamp: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    pub struct BindingVoteResult {
+        #[key]
+        pub proposal_id: u256,
+        pub approved: bool,
+        pub total_for: u256,
+        pub total_against: u256,
+    }
+
     #[constructor]
-    fn constructor(ref self: ContractState, xzb_token_address: ContractAddress) {
+    fn constructor(
+        ref self: ContractState, xzb_token_address: ContractAddress, binding_vote_threshold: u256,
+    ) {
         self.xzb_token.write(xzb_token_address);
         self.next_proposal_id.write(1.into());
+        self.binding_vote_threshold.write(binding_vote_threshold);
     }
 
     #[abi(embed_v0)]
@@ -186,52 +234,59 @@ pub mod DAO {
             self.proposals.write(proposal_id, proposal);
         }
 
-        fn castBindingVote(ref self: ContractState, proposal_id: u256, support: bool) {
+        fn cast_binding_vote(ref self: ContractState, proposal_id: u256, support: bool) {
             let caller = get_caller_address();
-            let binding_vote_proposal = self.bindingVoteProposals.read(proposal_id);
-            let bindingVoteCasted = self.bindingVoteCasted.read((proposal_id, caller));
+            let proposal_binding_data = self.proposal_binding_data.entry(proposal_id);
+            let in_phase = proposal_binding_data.in_phase.read();
+            assert!(in_phase, "Proposal not in voting phase");
 
-            assert!(binding_vote_proposal == true, "Proposal not in voting phase");
-            assert!(bindingVoteCasted == false, "Binding Vote Already casted");
+            let binding_vote = proposal_binding_data.voters.entry(caller).read();
+            assert!(binding_vote.get_vote().is_none(), "Binding Vote Already casted");
 
             let vote_weight = self._get_voter_weight(caller);
             assert(vote_weight > 0, 'No voting power');
+            let (mut votes_for, mut votes_against) = proposal_binding_data.votes.read();
 
-            let oldBindingVotesCountMap = self.bindingVotesCountMap.read(proposal_id);
+            let binding_vote = match support {
+                true => {
+                    votes_for += vote_weight;
+                    BindingVote::For(vote_weight)
+                },
+                _ => {
+                    votes_against += vote_weight;
+                    BindingVote::Against(vote_weight)
+                },
+            };
 
-            let newBindingVotesCountMap = self
-                ._update_proposal_votes(oldBindingVotesCountMap, support, vote_weight);
-
-            self.pollVotesCount.write(self.pollVotesCount.read() + 1);
-            self.bindingVotesCountMap.write(proposal_id, newBindingVotesCountMap);
-            self.bindingVoteCasted.write((proposal_id, caller), true);
-            self.bindingVotesCount.write(self.bindingVotesCount.read() + 1);
+            proposal_binding_data.voters.entry(caller).write(binding_vote);
+            proposal_binding_data.votes.write((votes_for, votes_against));
+            proposal_binding_data
+                .votes_count
+                .write(proposal_binding_data.votes_count.read() + vote_weight);
+            proposal_binding_data.voters_count.write(proposal_binding_data.voters_count.read() + 1);
 
             self
                 .emit(
                     Event::BindingVoteCast(
-                        BindingVoteCast {
-                            proposal_id: proposal_id,
-                            voter: caller,
-                            support: support,
-                            vote_weight: vote_weight,
-                        },
+                        BindingVoteCast { proposal_id, voter: caller, support, vote_weight },
                     ),
                 )
         }
 
         // This function is deprecated. Use startBindingVote() instead.
-        fn moveProposal(ref self: ContractState, proposal_id: u256) {
-            self.bindingVoteProposals.write(proposal_id, true);
+        fn move_proposal(ref self: ContractState, proposal_id: u256) {
+            self.proposal_binding_data.entry(proposal_id).in_phase.write(true);
         }
 
         fn vote_in_poll(ref self: ContractState, proposal_id: u256, support: bool) {
             let caller = get_caller_address();
             let mut proposal = self._validate_proposal_exists(proposal_id);
+
             assert(self._is_in_poll_phase(proposal_id), 'Not in poll phase');
             assert(!self.has_voted.read((proposal_id, caller)), 'Already voted');
             assert(proposal.id == proposal_id, 'Proposal does not exist');
             assert(proposal.status == ProposalStatus::PollPassed, 'Not in poll phase');
+
             let current_time = get_block_timestamp();
             assert(current_time <= proposal.poll_end_time, 'Poll phase ended');
             assert(!self.has_voted.read((proposal_id, caller)), 'Already voted');
@@ -248,12 +303,7 @@ pub mod DAO {
             self
                 .emit(
                     Event::PollVoted(
-                        PollVoted {
-                            proposal_id: proposal_id,
-                            voter: caller,
-                            support: support,
-                            vote_weight: vote_weight,
-                        },
+                        PollVoted { proposal_id, voter: caller, support, vote_weight },
                     ),
                 );
         }
@@ -400,7 +450,7 @@ pub mod DAO {
             }
         }
 
-        fn startBindingVote(
+        fn start_binding_vote(
             ref self: ContractState, proposal_id: u256, execute_action_address: ContractAddress,
         ) {
             // Verify proposal eligibility
@@ -414,11 +464,7 @@ pub mod DAO {
             proposal.executive_action_address = execute_action_address;
 
             self.proposals.write(proposal_id, proposal);
-            self.bindingVoteProposals.write(proposal_id, true);
-
-            // Initialize binding vote data for this proposal
-            let binding_vote_data = BindingVoteData { votesFor: 0, votesAgainst: 0 };
-            self.bindingVotesCountMap.write(proposal_id, binding_vote_data);
+            self.proposal_binding_data.entry(proposal_id).in_phase.write(true);
 
             self
                 .emit(
@@ -430,6 +476,35 @@ pub mod DAO {
                         },
                     ),
                 );
+        }
+
+        fn tally_binding_votes(ref self: ContractState, proposal_id: u256) {
+            let mut proposal = self._validate_proposal_exists(proposal_id);
+            assert(proposal.status == ProposalStatus::BindingVoteActive, 'Binding vote not active');
+            let proposal_binding_data = self.proposal_binding_data.entry(proposal_id);
+
+            assert(proposal_binding_data.in_phase.read(), 'Proposal not in voting phase');
+
+            let threshold = self.binding_vote_threshold.read();
+            let votes_count = proposal_binding_data.votes_count.read();
+            assert(votes_count >= threshold, 'Votes threshold not reached');
+
+            let (votes_for, votes_against) = proposal_binding_data.votes.read();
+
+            // the votes are tallied in such a way that a tie would lead to a loss
+            let approved = votes_for > votes_against;
+            proposal.status = match approved {
+                true => ProposalStatus::Approved,
+                _ => ProposalStatus::Rejected,
+            };
+
+            self.proposals.entry(proposal_id).write(proposal);
+
+            let event = BindingVoteResult {
+                proposal_id, approved, total_for: votes_for, total_against: votes_against,
+            };
+
+            self.emit(event);
         }
     }
 
@@ -464,26 +539,6 @@ pub mod DAO {
                 proposal.vote_against += vote_weight;
             }
             self.proposals.write(proposal_id, proposal);
-        }
-
-        fn _update_proposal_votes(
-            ref self: ContractState,
-            old_binding_votes_count_map: BindingVoteData,
-            support: bool,
-            vote_weight: u256,
-        ) -> BindingVoteData {
-            match support {
-                true => BindingVoteData {
-                    votesFor: old_binding_votes_count_map.votesFor
-                        + vote_weight.try_into().unwrap(),
-                    votesAgainst: old_binding_votes_count_map.votesAgainst,
-                },
-                false => BindingVoteData {
-                    votesFor: old_binding_votes_count_map.votesFor,
-                    votesAgainst: old_binding_votes_count_map.votesAgainst
-                        + vote_weight.try_into().unwrap(),
-                },
-            }
         }
     }
 }

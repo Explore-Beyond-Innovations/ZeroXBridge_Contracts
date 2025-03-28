@@ -8,6 +8,8 @@ use starknet::{ContractAddress, contract_address_const, get_block_timestamp};
 use l2::DAO::{IDAODispatcher, IDAODispatcherTrait, ProposalStatus, DAO};
 use l2::xZBERC20::{IMintableDispatcher, IMintableDispatcherTrait};
 
+const DEFAULT_BINDING_THRESHOLD: u256 = 1_000_000;
+
 fn owner() -> ContractAddress {
     contract_address_const::<'owner'>()
 }
@@ -28,6 +30,7 @@ fn deploy_dao(xzb_token: ContractAddress) -> ContractAddress {
     let contract_class = declare("DAO").unwrap().contract_class();
     let mut calldata = array![];
     calldata.append_serde(xzb_token);
+    calldata.append_serde(DEFAULT_BINDING_THRESHOLD);
     let (contract_address, _) = contract_class.deploy(@calldata).unwrap();
     contract_address
 }
@@ -48,6 +51,37 @@ fn mint_xzb(xzb_token: ContractAddress, user: ContractAddress, amount: u256) {
     let token_dispatcher = IERC20Dispatcher { contract_address: xzb_token };
     cheat_caller_address(xzb_token, owner(), CheatSpan::TargetCalls(1));
     token_dispatcher.transfer(user, amount);
+}
+
+fn feign_binding_votes(
+    dao_dispatcher: IDAODispatcher, xzb_token: ContractAddress, voters_len: u32,
+) {
+    let amount: u256 = 250_000;
+    cheat_caller_address(xzb_token, owner(), CheatSpan::TargetCalls(1));
+    let token_dispatcher = IMintableDispatcher { contract_address: xzb_token };
+    token_dispatcher.mint(owner(), amount * voters_len.into());
+    assert(voters_len <= 5, 'Max voters attained');
+    let alice = alice();
+    let voter1 = contract_address_const::<'voter1'>();
+    let voter2 = contract_address_const::<'voter2'>();
+    let voter3 = contract_address_const::<'voter3'>();
+    let voter4 = contract_address_const::<'voter4'>();
+
+    let voters = [alice, voter1, voter2, voter3, voter4].span();
+
+    let executive_action = contract_address_const::<'executor'>();
+    dao_dispatcher.update_proposal_status(1, ProposalStatus::PollPassed);
+    dao_dispatcher.start_binding_vote(1, executive_action);
+
+    let mut support: bool = true;
+    for i in 0..voters_len {
+        mint_xzb(xzb_token, *voters[i], amount); // default
+        cheat_caller_address(
+            dao_dispatcher.contract_address, *voters[i], CheatSpan::TargetCalls(1),
+        );
+        dao_dispatcher.cast_binding_vote(1, support);
+        support = !support;
+    };
 }
 
 #[test]
@@ -387,10 +421,10 @@ fn test_vote_successfully() {
 
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.moveProposal(1);
+    dao_dispatcher.move_proposal(1);
     // Simulate time passing
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.castBindingVote(1, true);
+    dao_dispatcher.cast_binding_vote(1, true);
 }
 
 #[test]
@@ -410,7 +444,7 @@ fn test_vote_should_panic_if_proposal_not_in_voting_phase() {
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
     // Simulate time passing
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.castBindingVote(1, true);
+    dao_dispatcher.cast_binding_vote(1, true);
 }
 
 #[test]
@@ -429,13 +463,13 @@ fn test_vote_should_panic_if_voter_already_voted() {
 
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.moveProposal(1);
+    dao_dispatcher.move_proposal(1);
     // Simulate time passing
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.castBindingVote(1, true);
+    dao_dispatcher.cast_binding_vote(1, true);
 
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.castBindingVote(1, true);
+    dao_dispatcher.cast_binding_vote(1, true);
 }
 
 
@@ -450,10 +484,10 @@ fn test_vote_should_panic_if_voter_has_no_voting_power() {
 
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.moveProposal(1);
+    dao_dispatcher.move_proposal(1);
     // Simulate time passing
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.castBindingVote(1, true);
+    dao_dispatcher.cast_binding_vote(1, true);
 }
 
 
@@ -472,11 +506,11 @@ fn test_vote_successfully_emmitted() {
 
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.moveProposal(1);
+    dao_dispatcher.move_proposal(1);
     // Simulate time passing
     let mut spy = spy_events();
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(2));
-    dao_dispatcher.castBindingVote(1, true);
+    dao_dispatcher.cast_binding_vote(1, true);
     spy
         .assert_emitted(
             @array![
@@ -512,7 +546,7 @@ fn test_start_binding_vote_status_transition() {
     // Start binding vote
     let alice = alice();
     cheat_caller_address(dao, alice, CheatSpan::TargetCalls(1));
-    dao_dispatcher.startBindingVote(proposal_id, executive_action);
+    dao_dispatcher.start_binding_vote(proposal_id, executive_action);
 
     // Verify status transition
     let proposal = dao_dispatcher.get_proposal(proposal_id);
@@ -533,7 +567,7 @@ fn test_start_binding_vote_executive_action_address_record() {
 
     // Start binding vote
     cheat_caller_address(dao, owner(), CheatSpan::TargetCalls(1));
-    dao_dispatcher.startBindingVote(proposal_id, executive_action);
+    dao_dispatcher.start_binding_vote(proposal_id, executive_action);
 
     // Verify executive action address is recorded
     let proposal = dao_dispatcher.get_proposal(proposal_id);
@@ -559,7 +593,7 @@ fn test_start_binding_vote_event_emission() {
     dao_dispatcher.update_proposal_status(proposal_id, ProposalStatus::PollPassed);
     let mut spy = spy_events();
     cheat_caller_address(dao, owner(), CheatSpan::TargetCalls(1));
-    dao_dispatcher.startBindingVote(proposal_id, executive_action);
+    dao_dispatcher.start_binding_vote(proposal_id, executive_action);
 
     // Verify event emission
     spy
@@ -590,7 +624,7 @@ fn test_start_binding_vote_nonexistent_proposal() {
     // Try to start binding vote on nonexistent proposal
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
     cheat_caller_address(dao, owner(), CheatSpan::TargetCalls(1));
-    dao_dispatcher.startBindingVote(999, executive_action);
+    dao_dispatcher.start_binding_vote(999, executive_action);
 }
 
 #[test]
@@ -607,5 +641,92 @@ fn test_start_binding_vote_not_passed_poll() {
     // Try to start binding vote on proposal that hasn't passed poll
     let dao_dispatcher = IDAODispatcher { contract_address: dao };
     cheat_caller_address(dao, owner(), CheatSpan::TargetCalls(1));
-    dao_dispatcher.startBindingVote(1, executive_action);
+    dao_dispatcher.start_binding_vote(1, executive_action);
+}
+
+#[test]
+fn test_tally_binding_vote_rejected_success() {
+    let xzb_token = deploy_xzb();
+    let dao = deploy_dao(xzb_token);
+
+    let proposal_id = 1;
+    let dao_dispatcher = IDAODispatcher { contract_address: dao };
+    create_proposal(dao, 1, 'Test Proposal', 1000, 2000);
+
+    // for a threshold of 1_000_000, vote two 'for' and two 'against'
+    // 250_000 each, the proposal should be rejected
+    let number_of_voters = 4;
+    let mut spy = spy_events();
+    feign_binding_votes(dao_dispatcher, xzb_token, number_of_voters);
+
+    dao_dispatcher.tally_binding_votes(proposal_id);
+
+    let proposal = dao_dispatcher.get_proposal(proposal_id);
+    assert(proposal.status == ProposalStatus::Rejected, 'Wrong status');
+
+    let expected_event = DAO::Event::BindingVoteResult(
+        DAO::BindingVoteResult {
+            proposal_id, approved: false, total_for: 500_000, total_against: 500_000,
+        },
+    );
+
+    spy.assert_emitted(@array![(dao, expected_event)]);
+}
+
+#[test]
+fn test_tally_binding_vote_approved_success() {
+    let xzb_token = deploy_xzb();
+    let dao = deploy_dao(xzb_token);
+
+    let proposal_id = 1;
+    let dao_dispatcher = IDAODispatcher { contract_address: dao };
+    create_proposal(dao, proposal_id, 'Test Proposal', 1000, 2000);
+
+    // to make it approve, we let the number of voters equal 5
+    let number_of_voters = 5;
+    let mut spy = spy_events();
+    feign_binding_votes(dao_dispatcher, xzb_token, number_of_voters);
+
+    dao_dispatcher.tally_binding_votes(proposal_id);
+
+    let proposal = dao_dispatcher.get_proposal(proposal_id);
+    assert(proposal.status == ProposalStatus::Approved, 'Wrong status');
+
+    let expected_event = DAO::Event::BindingVoteResult(
+        DAO::BindingVoteResult {
+            proposal_id, approved: true, total_for: 750_000, total_against: 500_000,
+        },
+    );
+
+    spy.assert_emitted(@array![(dao, expected_event)]);
+}
+
+#[test]
+#[should_panic(expected: 'Binding vote not active')]
+fn test_tally_binding_vote_already_tallied() {
+    let xzb_token = deploy_xzb();
+    let dao = deploy_dao(xzb_token);
+
+    let proposal_id = 1;
+    let dao_dispatcher = IDAODispatcher { contract_address: dao };
+    create_proposal(dao, proposal_id, 'Test Proposal', 1000, 2000);
+
+    dao_dispatcher.update_proposal_status(proposal_id, ProposalStatus::PollPassed);
+    dao_dispatcher.tally_binding_votes(proposal_id);
+}
+
+#[test]
+#[should_panic(expected: 'Votes threshold not reached')]
+fn test_tally_binding_vote_threshold_not_reached() {
+    let xzb_token = deploy_xzb();
+    let dao = deploy_dao(xzb_token);
+    let executive_action = contract_address_const::<'executor'>();
+
+    let proposal_id = 1;
+    let dao_dispatcher = IDAODispatcher { contract_address: dao };
+    create_proposal(dao, proposal_id, 'Test Proposal', 1000, 2000);
+
+    dao_dispatcher.update_proposal_status(proposal_id, ProposalStatus::PollPassed);
+    dao_dispatcher.start_binding_vote(proposal_id, executive_action);
+    dao_dispatcher.tally_binding_votes(proposal_id);
 }

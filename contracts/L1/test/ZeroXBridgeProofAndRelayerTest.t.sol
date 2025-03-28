@@ -53,7 +53,8 @@ contract ZeroXBridgeTest is Test {
     MockERC20 public token;
 
     address public owner = address(0x1);
-    address public user1 = address(0x2);
+    // address public user1 = address(0x2);
+    address public user1 = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
     address public user2 = address(0x3);
     address public relayer = address(0x4);
     address public nonRelayer = address(0x5);
@@ -290,11 +291,29 @@ contract ZeroXBridgeTest is Test {
     // Claim Function Tests
     // ========================
 
+    function registerUser(address user, uint256 starknetPubKey, uint256 ethAccountPrivateKey) internal {
+        bytes32 digest = keccak256(abi.encodePacked("UserRegistration", user, starknetPubKey));
+
+        // vm.startPrank(user);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ethAccountPrivateKey, digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        bridge.registerUser(signature, starknetPubKey);
+        // vm.stopPrank();
+    }
+
     function testSuccessfulClaim() public {
         testSuccessfulProofVerification();
 
+        address user = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
+        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
+        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
+
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
+
         // Set claimable funds for user1
-        uint256 amount = bridge.claimableFunds(user1);
+        uint256 amount = bridge.claimableFunds(user);
 
         uint256 contractBalance = token.balanceOf(address(bridge));
 
@@ -302,22 +321,28 @@ contract ZeroXBridgeTest is Test {
 
         // Expect the FundsClaimed event to be emitted
         vm.expectEmit(true, true, true, true);
-        emit ClaimEvent(user1, amount);
+        emit ClaimEvent(user, amount);
 
         // User claims the funds
-        vm.startPrank(user1);
+        vm.startPrank(user);
         bridge.claim_tokens();
         vm.stopPrank();
 
         // Assert that the user's claimable funds are now 0
-        assertEq(bridge.claimableFunds(user1), 0);
+        assertEq(bridge.claimableFunds(user), 0);
 
         // Check if the contract's token balance has decreased by the claimed amount
         assertEq(token.balanceOf(address(bridge)), contractBalance - amount);
-        assertEq(token.balanceOf(user1), amount);
+        assertEq(token.balanceOf(user), amount);
     }
 
     function testClaimNoFunds() public {
+        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
+        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
+
+        vm.prank(user1);
+        registerUser(user1, starknetPubKey, ethAccountPrivateKey);
+
         vm.startPrank(user1);
         vm.expectRevert("ZeroXBridge: No tokens to claim");
         bridge.claim_tokens();
@@ -326,6 +351,12 @@ contract ZeroXBridgeTest is Test {
 
     function testClaimAfterFundsClaimed() public {
         testSuccessfulProofVerification();
+
+        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
+        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
+
+        vm.prank(user1);
+        registerUser(user1, starknetPubKey, ethAccountPrivateKey);
 
         // Claim the funds
         vm.prank(user1);
