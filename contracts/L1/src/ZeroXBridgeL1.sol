@@ -54,6 +54,11 @@ contract ZeroXBridgeL1 is Ownable {
     //Starknet curve constants
     uint256 private constant K_BETA = 0x6f21413efbe40de150e596d72f7a8c5609ad26c15c915c1f4cdfcb99cee9e89;
     uint256 private constant K_MODULUS = 0x800000000000011000000000000000000000000000000000000000000000001;
+    // Full Stark Curve parameters
+    uint256 private constant STARK_ALPHA = 1;
+    uint256 private constant STARK_N = 0x800000000000010fffffffffffffffffffffffffffffffffffffffffffffffb;
+    uint256 private constant STARK_GX = 0x1ef15c18599971b7beced415a40f0c7deacfd9b0d1819e03d723d8bc943cfca;
+    uint256 private constant STARK_GY = 0x2fc95a6e5b3cfbfdb75f3e0f6c5e5f67e8e4f5e5a8d7e5e5f5e5f5e5f5e5f5e;
 
     // Cairo program hash that corresponds to the burn verification program
     uint256 public cairoVerifierId;
@@ -247,9 +252,13 @@ contract ZeroXBridgeL1 is Ownable {
      * @param token The address of the token to deposit
      * @param amount The amount of tokens to deposit
      * @param user The address that will receive the bridged tokens on L2
-     * @return Returns the generated commitment hash for verification on L2
+     * @return commitmentHash Returns the generated commitment hash for verification on L2
      */
-    function deposit_asset(address token, uint256 amount, address user) external onlyRegistered returns (bytes32) {
+    function deposit_asset(address token, uint256 amount, address user)
+        external
+        onlyRegistered
+        returns (bytes32 commitmentHash)
+    {
         // Verify token is whitelisted
         require(whitelistedTokens[token], "ZeroXBridge: Token not whitelisted");
         require(amount > 0, "ZeroXBridge: Amount must be greater than zero");
@@ -268,12 +277,10 @@ contract ZeroXBridgeL1 is Ownable {
 
         // Generate commitment hash for verification on L2
         // Hash includes token address, amount, user address, nonce, and chain ID for uniqueness
-        bytes32 commitmentHash = keccak256(abi.encodePacked(token, amount, user, nonce, block.chainid));
+        commitmentHash = keccak256(abi.encodePacked(token, amount, user, nonce, block.chainid));
 
         // Emit deposit event with all relevant details
         emit DepositEvent(token, amount, user, commitmentHash);
-
-        return commitmentHash;
     }
 
     /**
@@ -318,12 +325,12 @@ contract ZeroXBridgeL1 is Ownable {
      * @param ethAddress The Ethereum address of the user.
      * @param signature The user's signature.
      * @param starknetPubKey The Starknet public key.
-     * @return The recovered Ethereum address.
+     * @return recoveredAddress The recovered Ethereum address.
      */
     function recoverSigner(address ethAddress, bytes calldata signature, uint256 starknetPubKey)
         internal
-        pure
-        returns (address)
+        view
+        returns (address recoveredAddress)
     {
         require(ethAddress != address(0), "Invalid ethAddress");
         require(signature.length == 65, "Invalid signature length");
@@ -339,6 +346,139 @@ contract ZeroXBridgeL1 is Ownable {
             s := mload(add(sig, 64))
         }
 
-        return ecrecover(messageHash, v, r, s);
+        recoveredAddress = ecrecover(messageHash, v, r, s);
+    }
+
+    /**
+     * @notice Checks if a point (x, y) lies on the Stark Curve
+     * @param x X-coordinate
+     * @param y Y-coordinate
+     * @return isOnCurve True if the point is on the curve, false otherwise
+     */
+    function isOnStarkCurve(uint256 x, uint256 y) internal pure returns (bool isOnCurve) {
+        uint256 left = mulmod(y, y, K_MODULUS);
+        uint256 x2 = mulmod(x, x, K_MODULUS);
+        uint256 x3 = mulmod(x2, x, K_MODULUS);
+        uint256 right = addmod(addmod(x3, mulmod(STARK_ALPHA, x, K_MODULUS), K_MODULUS), K_BETA, K_MODULUS);
+        isOnCurve = left == right;
+    }
+
+    /**
+     * @notice Adds two points on the Stark Curve
+     * @param x1 X-coordinate of first point
+     * @param y1 Y-coordinate of first point
+     * @param x2 X-coordinate of second point
+     * @param y2 Y-coordinate of second point
+     * @return x3 Resulting X-coordinate of the point
+     * @return y3 Resulting Y-coordinate of the point
+     */
+    function ecAdd(uint256 x1, uint256 y1, uint256 x2, uint256 y2) internal view returns (uint256 x3, uint256 y3) {
+        if (x1 == 0 && y1 == 0) return (x2, y2);
+        if (x2 == 0 && y2 == 0) return (x1, y1);
+        if (x1 == x2) {
+            if ((y1 + y2) % K_MODULUS == 0) return (0, 0); // Point at infinity
+            return ecDouble(x1, y1);
+        }
+        uint256 dx = (x2 + K_MODULUS - x1) % K_MODULUS;
+        uint256 dy = (y2 + K_MODULUS - y1) % K_MODULUS;
+        uint256 lambda = mulmod(dy, fieldPow(dx, K_MODULUS - 2), K_MODULUS);
+        x3 = (mulmod(lambda, lambda, K_MODULUS) + K_MODULUS - x1 + K_MODULUS - x2) % K_MODULUS;
+        y3 = (mulmod(lambda, (x1 + K_MODULUS - x3) % K_MODULUS, K_MODULUS) + K_MODULUS - y1) % K_MODULUS;
+    }
+
+    /**
+     * @notice Doubles a point on the Stark Curve
+     * @param x X-coordinate
+     * @param y Y-coordinate
+     * @return x2 Resulting X-coordinate of the point
+     * @return y2 Resulting Y-coordinate of the point
+     */
+    function ecDouble(uint256 x, uint256 y) internal view returns (uint256 x2, uint256 y2) {
+        if (y == 0) return (0, 0); // Point at infinity
+        uint256 lambda = mulmod(
+            addmod(mulmod(3, mulmod(x, x, K_MODULUS), K_MODULUS), STARK_ALPHA, K_MODULUS),
+            fieldPow(mulmod(2, y, K_MODULUS), K_MODULUS - 2),
+            K_MODULUS
+        );
+        x2 = (mulmod(lambda, lambda, K_MODULUS) + K_MODULUS - x - x) % K_MODULUS;
+        y2 = (mulmod(lambda, (x + K_MODULUS - x2) % K_MODULUS, K_MODULUS) + K_MODULUS - y) % K_MODULUS;
+    }
+
+    /**
+     * @notice Multiplies a point on the Stark Curve by a scalar
+     * @param scalar Scalar value
+     * @param x X-coordinate
+     * @param y Y-coordinate
+     * @return xR Resulting X-coordinate of the point
+     * @return yR Resulting Y-coordinate of the point
+     */
+    function ecMul(uint256 scalar, uint256 x, uint256 y) internal view returns (uint256 xR, uint256 yR) {
+        xR = 0;
+        yR = 0;
+        uint256 scalarBits = scalar;
+        uint256 px = x;
+        uint256 py = y;
+        while (scalarBits > 0) {
+            if (scalarBits & 1 == 1) {
+                (xR, yR) = ecAdd(xR, yR, px, py);
+            }
+            (px, py) = ecDouble(px, py);
+            scalarBits >>= 1;
+        }
+    }
+
+    /**
+     * @notice Verifies a Starknet signature
+     * @param messageHash Hash of the message signed
+     * @param starknetSig Signature as bytes (r, s concatenated)
+     * @param starkPubKeyX X-coordinate of the Starknet public key
+     * @param starkPubKeyY Y-coordinate of the Starknet public key
+     * @return isValid True if the signature is valid, false otherwise
+     */
+    function verifyStarknetSignature(
+        uint256 messageHash,
+        bytes calldata starknetSig,
+        uint256 starkPubKeyX,
+        uint256 starkPubKeyY
+    ) public view returns (bool isValid) {
+        // Extract r and s from starknetSig (assuming 64 bytes: 32 for r, 32 for s)
+        require(starknetSig.length == 64, "Invalid signature length");
+        uint256 r = uint256(bytes32(starknetSig[0:32]));
+        uint256 s = uint256(bytes32(starknetSig[32:64]));
+
+        // Validate public key is on the curve
+        require(isOnStarkCurve(starkPubKeyX, starkPubKeyY), "Public key not on Stark Curve");
+
+        // Validate sig. components
+        require(r >= 1 && r < STARK_N, "r out of range");
+        require(s >= 1 && s < STARK_N, "s out of range");
+
+        // Reduc message hash modulo N
+        uint256 z = messageHash % STARK_N;
+
+        // calc ECDSA components
+        uint256 w = fieldPow(s, STARK_N - 2); // s^(-1) mod N
+        uint256 u1 = mulmod(z, w, STARK_N);
+        uint256 u2 = mulmod(r, w, STARK_N);
+
+        // // calc P = u1 * G + u2 * Q
+        // (uint256 px, uint256 py) = ecAdd(
+        //     ecMul(u1, STARK_GX, STARK_GY),
+        //     ecMul(u2, starkPubKeyX, starkPubKeyY)
+        // );
+        // Calculate u1 * G
+        (uint256 x1, uint256 y1) = ecMul(u1, STARK_GX, STARK_GY);
+        // Calculate u2 * Q
+        (uint256 x2, uint256 y2) = ecMul(u2, starkPubKeyX, starkPubKeyY);
+        // Add the two points: P = u1 * G + u2 * Q
+        (uint256 px, uint256 py) = ecAdd(x1, y1, x2, y2);
+
+        // Check if point is at infinity
+        if (px == 0 && py == 0) {
+            return false;
+        }
+
+        // Verify signature
+        isValid = (px % STARK_N) == r;
     }
 }
