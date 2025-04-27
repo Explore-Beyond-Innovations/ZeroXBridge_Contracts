@@ -5,3 +5,4 @@ pub mod DAO;
 pub mod ZeroXBridgeL2;
 pub mod Dynamicrate;
 pub mod L2Oracle;
+pub mod merkle_state_manager;
