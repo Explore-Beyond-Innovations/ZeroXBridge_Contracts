@@ -15,54 +15,19 @@ contract MockERC20 is ERC20 {
         _mint(to, amount);
     }
 }
-// Mock GPS Statement Verifier for testing
-
-contract MockGpsStatementVerifier is IGpsStatementVerifier {
-    bool public shouldVerifySucceed = true;
-    mapping(bytes32 => bool) public registeredProofs;
-
-    function setShouldVerifySucceed(bool _shouldSucceed) external {
-        shouldVerifySucceed = _shouldSucceed;
-    }
-
-    function verifyProofAndRegister(
-        uint256[] calldata proofParams,
-        uint256[] calldata proof,
-        uint256[] calldata publicInputs,
-        uint256 cairoVerifierId
-    ) external override returns (bool) {
-        bytes32 proofHash = keccak256(abi.encodePacked(proof));
-        require(!registeredProofs[proofHash], "Proof already registered");
-
-        if (shouldVerifySucceed) {
-            registeredProofs[proofHash] = true;
-            return true;
-        }
-        return false;
-    }
-
-    function isProofRegistered(uint256[] calldata proof) external view returns (bool) {
-        bytes32 proofHash = keccak256(abi.encodePacked(proof));
-        return registeredProofs[proofHash];
-    }
-}
 
 contract ZeroXBridgeTest is Test {
     ZeroXBridgeL1 public bridge;
-    MockGpsStatementVerifier public mockVerifier;
     MockERC20 public token;
 
     address public owner = address(0x1);
-    // address public user1 = address(0x2);
-    address public user1 = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
+    address public user = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
+    uint256 public starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
+    uint256 public ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
     address public user2 = address(0x3);
     address public relayer = address(0x4);
     address public nonRelayer = address(0x5);
-
-    uint256 public cairoVerifierId = 123456789;
-
-    uint256[] public proofParams;
-    uint256[] public proof;
+    uint256 public blockHash = 0x0123456;
 
     event FundsUnlocked(address indexed user, uint256 amount, bytes32 commitmentHash);
 
@@ -75,15 +40,12 @@ contract ZeroXBridgeTest is Test {
     function setUp() public {
         vm.startPrank(owner);
 
-        // Initialize mock verifier
-        mockVerifier = new MockGpsStatementVerifier();
-
         // Deploy Mock ERC20 Token
         token = new MockERC20("MockToken", "MTK");
 
         // Initialize bridge with mock verifier
         address admin = address(0x123);
-        bridge = new ZeroXBridgeL1(address(mockVerifier), admin, cairoVerifierId, owner, address(token));
+        bridge = new ZeroXBridgeL1(admin, owner, address(token));
 
         // Setup approved relayer
         bridge.setRelayerStatus(relayer, true);
@@ -91,12 +53,6 @@ contract ZeroXBridgeTest is Test {
         // Mint tokens to the contract for testing
         uint256 initialMintAmount = 1000000 * 10 ** 18; // 1 million tokens
         token.mint(address(bridge), initialMintAmount);
-
-        // Initialize proof array with dummy values for testing
-        for (uint256 i = 0; i < 10; i++) {
-            proofParams.push(i);
-            proof.push(i + 100);
-        }
 
         vm.stopPrank();
     }
@@ -110,16 +66,10 @@ contract ZeroXBridgeTest is Test {
     }
 
     function test_RevertWhen_NonOwnerCallsRestrictedFunctions() public {
-        vm.startPrank(user1);
+        vm.startPrank(user);
 
-        vm.expectRevert(abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user1));
+        vm.expectRevert(abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user));
         bridge.setRelayerStatus(relayer, false);
-
-        vm.expectRevert(abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user1));
-        bridge.updateGpsVerifier(address(0));
-
-        vm.expectRevert(abi.encodeWithSelector(OwnableUnauthorizedAccount.selector, user1));
-        bridge.updateCairoVerifierId(0);
 
         vm.stopPrank();
     }
@@ -133,15 +83,15 @@ contract ZeroXBridgeTest is Test {
 
         // Test adding a relayer
         vm.expectEmit(true, true, true, true);
-        emit RelayerStatusChanged(user1, true);
-        bridge.setRelayerStatus(user1, true);
-        assertTrue(bridge.approvedRelayers(user1));
+        emit RelayerStatusChanged(user, true);
+        bridge.setRelayerStatus(user, true);
+        assertTrue(bridge.approvedRelayers(user));
 
         // Test removing a relayer
         vm.expectEmit(true, true, true, true);
-        emit RelayerStatusChanged(user1, false);
-        bridge.setRelayerStatus(user1, false);
-        assertFalse(bridge.approvedRelayers(user1));
+        emit RelayerStatusChanged(user, false);
+        bridge.setRelayerStatus(user, false);
+        assertFalse(bridge.approvedRelayers(user));
 
         vm.stopPrank();
     }
@@ -149,42 +99,20 @@ contract ZeroXBridgeTest is Test {
     function testOnlyApprovedRelayersCanSubmitProofs() public {
         uint256 amount = 1 ether;
         uint256 l2TxId = 12345;
-        bytes32 commitmentHash = keccak256(abi.encodePacked(uint256(uint160(user1)), amount, l2TxId, block.chainid));
+        uint256 commitmentHash = uint256(keccak256(abi.encodePacked(starknetPubKey, amount, blockHash)));
 
         // Non-relayer attempt should fail
         vm.startPrank(nonRelayer);
         vm.expectRevert("ZeroXBridge: Only approved relayers can submit proofs");
-        bridge.unlock_funds_with_proof(proofParams, proof, user1, amount, l2TxId, commitmentHash);
+        bridge.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
         vm.stopPrank();
 
         // Approved relayer should succeed (assuming valid proof)
         vm.prank(relayer);
-        bridge.unlock_funds_with_proof(proofParams, proof, user1, amount, l2TxId, commitmentHash);
+        bridge.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
 
         // Verify funds were added
-        assertEq(bridge.claimableFunds(user1), amount);
-    }
-
-    // ========================
-    // Configuration Tests
-    // ========================
-
-    function testUpdateGpsVerifier() public {
-        address newVerifier = address(0x123);
-
-        vm.prank(owner);
-        bridge.updateGpsVerifier(newVerifier);
-
-        assertEq(address(bridge.gpsVerifier()), newVerifier);
-    }
-
-    function testUpdateCairoVerifierId() public {
-        uint256 newVerifierId = 987654321;
-
-        vm.prank(owner);
-        bridge.updateCairoVerifierId(newVerifierId);
-
-        assertEq(bridge.cairoVerifierId(), newVerifierId);
+        assertEq(bridge.claimableFunds(user), amount);
     }
 
     // ========================
@@ -193,19 +121,15 @@ contract ZeroXBridgeTest is Test {
 
     function testSuccessfulProofVerification() public {
         uint256 amount = 2 ** 18; // amount to unlock
-        uint256 l2TxId = 12345;
-        bytes32 commitmentHash = keccak256(abi.encodePacked(uint256(uint160(user1)), amount, l2TxId, block.chainid));
-
-        // Ensure mock verifier will succeed
-        mockVerifier.setShouldVerifySucceed(true);
+        uint256 commitmentHash = uint256(keccak256(abi.encodePacked(starknetPubKey, amount, blockHash)));
 
         vm.prank(relayer);
         vm.expectEmit(true, true, true, true);
-        emit FundsUnlocked(user1, amount, commitmentHash);
-        bridge.unlock_funds_with_proof(proofParams, proof, user1, amount, l2TxId, commitmentHash);
+        emit FundsUnlocked(user, amount, commitmentHash);
+        bridge.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
 
         // Verify funds were added
-        assertEq(bridge.claimableFunds(user1), amount);
+        assertEq(bridge.claimableFunds(user), amount);
 
         // Verify the proof and commitment are marked as used
         bytes32 proofHash = keccak256(abi.encodePacked(proof));
@@ -215,31 +139,26 @@ contract ZeroXBridgeTest is Test {
 
     function test_RevertFailingProofVerification() public {
         uint256 amount = 1 ether;
-        uint256 l2TxId = 12345;
-        bytes32 commitmentHash = keccak256(abi.encodePacked(uint256(uint160(user1)), amount, l2TxId, block.chainid));
-
-        // Set verifier to fail
-        mockVerifier.setShouldVerifySucceed(false);
+        uint256 commitmentHash = uint256(keccak256(abi.encodePacked(starknetPubKey, amount, blockHash)));
 
         vm.prank(relayer);
         // vm.expectRevert("ZeroXBridge: Invalid proof");
         vm.expectRevert(abi.encodePacked("ZeroXBridge: Invalid proof"));
 
-        bridge.unlock_funds_with_proof(proofParams, proof, user1, amount, l2TxId, commitmentHash);
+        bridge.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
 
         // Verify no funds were added
-        assertEq(bridge.claimableFunds(user1), 0);
+        assertEq(bridge.claimableFunds(user), 0);
     }
 
     function testInvalidCommitmentHash() public {
         uint256 amount = 1 ether;
-        uint256 l2TxId = 12345;
         // Deliberately create wrong commitment hash
         bytes32 wrongCommitmentHash = keccak256(abi.encodePacked("wrong data"));
 
         vm.prank(relayer);
         vm.expectRevert("ZeroXBridge: Invalid commitment hash");
-        bridge.unlock_funds_with_proof(proofParams, proof, user1, amount, l2TxId, wrongCommitmentHash);
+        bridge.unlock_funds_with_proof(wrongCommitmentHash, starknetPubKey, amount, blockHash);
     }
 
     // ========================
@@ -248,43 +167,32 @@ contract ZeroXBridgeTest is Test {
 
     function testPreventProofReuse() public {
         uint256 amount = 1 ether;
-        uint256 l2TxId = 12345;
-        bytes32 commitmentHash = keccak256(abi.encodePacked(uint256(uint160(user1)), amount, l2TxId, block.chainid));
+        blockHash = 0x0123456;
+        commitmentHash = uint256(keccak256(abi.encodePacked(starknetPubKey, amount, blockHash)));
 
         // First attempt should succeed
         vm.prank(relayer);
-        bridge.unlock_funds_with_proof(proofParams, proof, user1, amount, l2TxId, commitmentHash);
+        bridge.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
 
         // Same proof should be rejected
         vm.prank(relayer);
         vm.expectRevert("ZeroXBridge: Proof has already been used");
-        bridge.unlock_funds_with_proof(proofParams, proof, user1, amount, l2TxId, commitmentHash);
+        bridge.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
     }
 
     function testPreventCommitmentReuse() public {
         uint256 amount = 1 ether;
-        uint256 l2TxId = 12345;
-        bytes32 commitmentHash = keccak256(abi.encodePacked(uint256(uint160(user1)), amount, l2TxId, block.chainid));
+        blockHash = 0x0123456;
+        commitmentHash = uint256(keccak256(abi.encodePacked(starknetPubKey, amount, blockHash)));
 
         // First attempt should succeed
         vm.prank(relayer);
-        bridge.unlock_funds_with_proof(proofParams, proof, user1, amount, l2TxId, commitmentHash);
-
-        // Create different proof but same commitment
-        uint256[] memory differentProof = new uint256[](proof.length);
-        for (uint256 i = 0; i < proof.length; i++) {
-            differentProof[i] = proof[i] + 1000; // Make it different
-        }
-
-        // Mock verifier needs to be reset for new proof
-        MockGpsStatementVerifier newMock = new MockGpsStatementVerifier();
-        vm.prank(owner);
-        bridge.updateGpsVerifier(address(newMock));
+        bridge.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
 
         // Different proof but same commitment should be rejected
         vm.prank(relayer);
         vm.expectRevert("ZeroXBridge: Commitment already processed");
-        bridge.unlock_funds_with_proof(proofParams, differentProof, user1, amount, l2TxId, commitmentHash);
+        bridge.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
     }
 
     // ========================
@@ -305,14 +213,10 @@ contract ZeroXBridgeTest is Test {
     function testSuccessfulClaim() public {
         testSuccessfulProofVerification();
 
-        address user = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
         vm.prank(user);
         registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
-        // Set claimable funds for user1
+        // Set claimable funds for user
         uint256 amount = bridge.claimableFunds(user);
 
         uint256 contractBalance = token.balanceOf(address(bridge));
@@ -337,13 +241,10 @@ contract ZeroXBridgeTest is Test {
     }
 
     function testClaimNoFunds() public {
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
-        vm.prank(user1);
-        registerUser(user1, starknetPubKey, ethAccountPrivateKey);
-
-        vm.startPrank(user1);
+        vm.startPrank(user);
         vm.expectRevert("ZeroXBridge: No tokens to claim");
         bridge.claim_tokens();
         vm.stopPrank();
@@ -352,18 +253,15 @@ contract ZeroXBridgeTest is Test {
     function testClaimAfterFundsClaimed() public {
         testSuccessfulProofVerification();
 
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(user1);
-        registerUser(user1, starknetPubKey, ethAccountPrivateKey);
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Claim the funds
-        vm.prank(user1);
+        vm.prank(user);
         bridge.claim_tokens();
 
         // Try to claim again, should fail because funds are already claimed
-        vm.startPrank(user1);
+        vm.startPrank(user);
         vm.expectRevert("ZeroXBridge: No tokens to claim");
         bridge.claim_tokens();
         vm.stopPrank();

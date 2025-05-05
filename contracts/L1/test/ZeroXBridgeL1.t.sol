@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {ZeroXBridgeL1} from "../src/ZeroXBridgeL1.sol";
+import {ProofRegistry} from "../src/ProofRegistry.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -11,45 +12,6 @@ import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.so
 
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {console} from "forge-std/console.sol";
-
-interface IGpsStatementVerifier {
-    function verifyProofAndRegister(
-        uint256[] calldata proofParams,
-        uint256[] calldata proof,
-        uint256[] calldata publicInputs,
-        uint256 cairoVerifierId
-    ) external returns (bool);
-}
-
-contract MockGpsStatementVerifier is IGpsStatementVerifier {
-    bool public shouldVerifySucceed = true;
-    mapping(bytes32 => bool) public registeredProofs;
-
-    function setShouldVerifySucceed(bool _shouldSucceed) external {
-        shouldVerifySucceed = _shouldSucceed;
-    }
-
-    function verifyProofAndRegister(
-        uint256[] calldata proofParams,
-        uint256[] calldata proof,
-        uint256[] calldata publicInputs,
-        uint256 cairoVerifierId
-    ) external override returns (bool) {
-        bytes32 proofHash = keccak256(abi.encodePacked(proof));
-        require(!registeredProofs[proofHash], "Proof already registered");
-
-        if (shouldVerifySucceed) {
-            registeredProofs[proofHash] = true;
-            return true;
-        }
-        return false;
-    }
-
-    function isProofRegistered(uint256[] calldata proof) external view returns (bool) {
-        bytes32 proofHash = keccak256(abi.encodePacked(proof));
-        return registeredProofs[proofHash];
-    }
-}
 
 // // Test contract for AssetPricer
 contract ZeroXBridgeL1Test is Test {
@@ -60,12 +22,8 @@ contract ZeroXBridgeL1Test is Test {
     address public daiPriceFeed;
     address public usdcPriceFeed;
 
-    MockGpsStatementVerifier public mockVerifier;
-    //     MockERC20 public token;
-
+    // MockERC20 public token;
     address public owner = address(0x1);
-    address public user1 = address(0x2);
-    address public user2 = address(0x3);
     address public relayer = address(0x4);
     address public nonRelayer = address(0x5);
     address public admin;
@@ -73,13 +31,13 @@ contract ZeroXBridgeL1Test is Test {
     address public token2;
     MockERC20 public token;
 
-    uint256 public l2TxId = 12345;
-    bytes32 public commitmentHash;
-
-    uint256 public cairoVerifierId = 123456789;
-
-    uint256[] public proofParams;
-    uint256[] public proof;
+    // Proof Generation
+    uint256 public user;
+    uint256 public amount;
+    uint256 public starknetPubKey;
+    uint256 public commitmentHash;
+    uint256 public ethAccountPrivateKey;
+    uint256 public blockHash;
 
     using ECDSA for bytes32;
 
@@ -108,11 +66,10 @@ contract ZeroXBridgeL1Test is Test {
         token1 = address(0x456);
         token2 = address(0x789);
         token = new MockERC20(18);
-        mockVerifier = new MockGpsStatementVerifier();
 
         vm.startPrank(owner);
         // Deploy the AssetPricer contract
-        assetPricer = new ZeroXBridgeL1(address(mockVerifier), admin, cairoVerifierId, owner, address(token));
+        assetPricer = new ZeroXBridgeL1(admin, owner, address(token));
 
         // Setup approved relayer
         assetPricer.setRelayerStatus(relayer, true);
@@ -121,16 +78,13 @@ contract ZeroXBridgeL1Test is Test {
         uint256 initialMintAmount = 1000000 * 10 ** 18; // 1 million tokens
         token.mint(address(assetPricer), initialMintAmount);
 
-        // Initialize proof array with dummy values for testing
-        for (uint256 i = 0; i < 10; i++) {
-            proofParams.push(i);
-            proof.push(i + 100);
-        }
-
         // Create a dummy commitment hash for tests involving unlock_funds_with_proof
-        address user = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        uint256 amount = 100 ether;
-        commitmentHash = keccak256(abi.encodePacked(uint256(uint160(user)), amount, l2TxId, block.chainid));
+        user = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
+        amount = 100 ether;
+        starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
+        ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
+        blockHash = 0x0123456;
+        commitmentHash = uint256(keccak256(abi.encodePacked(starknetPubKey, amount, blockHash)));
 
         // Deploy mock ERC20 tokens
         dai = new MockERC20(18); // DAI with 18 decimals
@@ -280,41 +234,28 @@ contract ZeroXBridgeL1Test is Test {
         assetPricer.update_tvl();
     }
 
-    function registerUser(address user, uint256 starknetPubKey, uint256 ethAccountPrivateKey) internal {
-        bytes32 digest = keccak256(abi.encodePacked("UserRegistration", user, starknetPubKey));
-
-        // vm.startPrank(user);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ethAccountPrivateKey, digest);
+    function registerUser(address _user, uint256 _starknetPubKey, uin256 _ethAccountPrivateKey) internal {
+        bytes32 digest = keccak256(abi.encodePacked("UserRegistration", _user, starknetPubKey));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(_ethAccountPrivateKey, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
-
-        assetPricer.registerUser(signature, starknetPubKey);
-        // vm.stopPrank();
+        assetPricer.registerUser(signature, _starknetPubKey);
     }
 
     function testRegisterUser() public {
-        address user = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
         vm.prank(user);
         registerUser(user, starknetPubKey, ethAccountPrivateKey);
-        // vm.stopPrank();
     }
 
     function testClaimTokens() public {
         // Setup test data
         uint256 amount = 100 ether;
 
-        address user = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(user);
+        vm.prank();
         registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Simulate funds being unlocked
         vm.prank(relayer);
-        assetPricer.unlock_funds_with_proof(proofParams, proof, user, amount, l2TxId, commitmentHash);
+        assetPricer.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
 
         // Expect ClaimEvent to be emitted
         vm.expectEmit(true, true, false, true);
@@ -330,39 +271,25 @@ contract ZeroXBridgeL1Test is Test {
     }
 
     function testClaimTokensNoFunds() public {
-        address user_1 = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(user_1);
-        registerUser(user_1, starknetPubKey, ethAccountPrivateKey);
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Attempt to claim with no funds
         vm.expectRevert("ZeroXBridge: No tokens to claim");
-        vm.prank(user_1);
+        vm.prank(user);
         assetPricer.claim_tokens();
     }
 
     function testFullClaimOnly() public {
-        // Setup test data
-        uint256 amount = 100 ether;
-        // address user = address(0x123);
-        address user = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
         vm.startPrank(user);
         bytes32 digest = keccak256(abi.encodePacked("UserRegistration", user, starknetPubKey));
 
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ethAccountPrivateKey, digest);
-        bytes memory signature = abi.encodePacked(r, s, v);
-
-        assetPricer.registerUser(signature, starknetPubKey);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
         vm.stopPrank();
 
         // Simulate funds being unlocked
         vm.prank(relayer);
-        assetPricer.unlock_funds_with_proof(proofParams, proof, user, amount, l2TxId, commitmentHash);
+        assetPricer.unlock_funds_with_proof(commitmentHash, starknetPubKey, amount, blockHash);
 
         // Verify initial claimable amount
         assertEq(assetPricer.claimableFunds(user), amount);
@@ -386,8 +313,7 @@ contract ZeroXBridgeL1Test is Test {
 
         vm.startPrank(owner);
         // Deploy the AssetPricer contract
-        ZeroXBridgeL1 newAssetPricer =
-            new ZeroXBridgeL1(address(mockVerifier), admin, cairoVerifierId, owner, address(token));
+        ZeroXBridgeL1 newAssetPricer = new ZeroXBridgeL1(admin, owner, address(token));
         vm.stopPrank();
 
         // Call update_tvl
@@ -480,15 +406,11 @@ contract ZeroXBridgeL1Test is Test {
     // Test deposit_asset functionality
     function testSuccessfulETHDeposit() public {
         uint256 depositAmount = 1 ether;
-        address depositUser = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
 
-        vm.deal(depositUser, depositAmount);
+        vm.deal(user, depositAmount);
 
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(depositUser);
-        registerUser(depositUser, starknetPubKey, ethAccountPrivateKey);
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Setup - whitelist the token for deposits
         vm.prank(admin);
@@ -501,17 +423,17 @@ contract ZeroXBridgeL1Test is Test {
                 uint256(ZeroXBridgeL1.AssetType.ETH),
                 address(0),
                 depositAmount,
-                depositUser,
+                user,
                 uint256(0), // nonce is 0 for first deposit
                 block.chainid
             )
         );
-        emit DepositEvent(address(0), ZeroXBridgeL1.AssetType.ETH, depositAmount, depositUser, expectedCommitmentHash);
+        emit DepositEvent(address(0), ZeroXBridgeL1.AssetType.ETH, depositAmount, user, expectedCommitmentHash);
 
         // Make the deposit as user1
-        vm.prank(depositUser);
+        vm.prank(user);
         bytes32 returnedHash = assetPricer.deposit_asset{value: depositAmount}(
-            ZeroXBridgeL1.AssetType.ETH, address(0), depositAmount, depositUser
+            ZeroXBridgeL1.AssetType.ETH, address(0), depositAmount, user
         );
         // Verify the correct hash was returned
         assertEq(returnedHash, expectedCommitmentHash, "Commitment hash should match expected");
@@ -520,59 +442,46 @@ contract ZeroXBridgeL1Test is Test {
         assertEq(address(assetPricer).balance, depositAmount);
 
         // Verify deposit tracking
-        assertEq(assetPricer.userDeposits(address(0), depositUser), depositAmount, "User deposit should be tracked");
+        assertEq(assetPricer.userDeposits(address(0), user), depositAmount, "User deposit should be tracked");
 
         // Verify nonce was incremented
-        assertEq(assetPricer.nextDepositNonce(depositUser), 1, "Nonce should be incremented");
+        assertEq(assetPricer.nextDepositNonce(user), 1, "Nonce should be incremented");
     }
 
     function testSuccessfulERC20Deposit() public {
         uint256 depositAmount = 100 * 10 ** 18; // 100 tokens with 18 decimals
-        address depositUser = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
 
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(depositUser);
-        registerUser(depositUser, starknetPubKey, ethAccountPrivateKey);
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Setup - whitelist the token for deposits
         vm.prank(admin);
         assetPricer.registerToken(ZeroXBridgeL1.AssetType.ERC20, address(token));
 
         // Mint tokens to user1
-        token.mint(depositUser, depositAmount);
+        token.mint(user, depositAmount);
 
-        vm.prank(depositUser);
+        vm.prank(user);
         token.approve(address(assetPricer), depositAmount);
 
         bytes32 expectedCommitmentHash = keccak256(
             abi.encodePacked(
-                uint256(ZeroXBridgeL1.AssetType.ERC20),
-                address(token),
-                depositAmount,
-                depositUser,
-                uint256(0),
-                block.chainid
+                uint256(ZeroXBridgeL1.AssetType.ERC20), address(token), depositAmount, user, uint256(0), block.chainid
             )
         );
 
-        vm.prank(depositUser);
+        vm.prank(user);
         bytes32 commitmentHash_ =
-            assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), depositAmount, depositUser);
+            assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), depositAmount, user);
 
         assertEq(commitmentHash_, expectedCommitmentHash);
-        assertEq(assetPricer.userDeposits(address(token), depositUser), depositAmount);
-        assertEq(assetPricer.nextDepositNonce(depositUser), 1);
+        assertEq(assetPricer.userDeposits(address(token), user), depositAmount);
+        assertEq(assetPricer.nextDepositNonce(user), 1);
     }
 
     function testMultipleDepositsIncrementNonce() public {
-        address user_1 = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(user_1);
-        registerUser(user_1, starknetPubKey, ethAccountPrivateKey);
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Setup - whitelist the token for deposits
         vm.prank(admin);
@@ -581,55 +490,47 @@ contract ZeroXBridgeL1Test is Test {
         uint256 depositAmount = 100 * 10 ** 18;
 
         // Mint some tokens to user1
-        token.mint(user_1, depositAmount * 2);
+        token.mint(user, depositAmount * 2);
 
         // Approve the bridge to spend user1's tokens
-        vm.prank(user_1);
+        vm.prank(user);
         token.approve(address(assetPricer), depositAmount * 2);
 
         // First deposit
-        vm.prank(user_1);
-        bytes32 hash1 = assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), depositAmount, user_1);
+        vm.prank(user);
+        bytes32 hash1 = assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), depositAmount, user);
 
         // Second deposit
-        vm.prank(user_1);
-        bytes32 hash2 = assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), depositAmount, user_1);
+        vm.prank(user);
+        bytes32 hash2 = assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), depositAmount, user);
 
         // Verify hashes are different due to different nonces
         assertTrue(hash1 != hash2, "Commitment hashes should be different");
 
         // Verify nonce was incremented twice
-        assertEq(assetPricer.nextDepositNonce(user_1), 2, "Nonce should be incremented twice");
+        assertEq(assetPricer.nextDepositNonce(user), 2, "Nonce should be incremented twice");
 
         // Verify deposit tracking accumulates
-        assertEq(assetPricer.userDeposits(address(token), user_1), depositAmount * 2, "User deposits should accumulate");
+        assertEq(assetPricer.userDeposits(address(token), user), depositAmount * 2, "User deposits should accumulate");
     }
 
     function testCannotDepositZeroAmount() public {
-        address user_1 = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(user_1);
-        registerUser(user_1, starknetPubKey, ethAccountPrivateKey);
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Setup - whitelist the token for deposits
         vm.prank(admin);
         assetPricer.registerToken(ZeroXBridgeL1.AssetType.ERC20, address(token));
 
         // Attempt deposit with zero amount should fail
-        vm.prank(user_1);
+        vm.prank(user);
         vm.expectRevert("ZeroXBridge: Amount must be greater than zero");
-        assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), 0, user_1);
+        assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), 0, user);
     }
 
     function testCannotDepositToZeroAddress() public {
-        address user_1 = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(user_1);
-        registerUser(user_1, starknetPubKey, ethAccountPrivateKey);
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Setup - whitelist the token for deposits
         vm.prank(admin);
@@ -638,28 +539,24 @@ contract ZeroXBridgeL1Test is Test {
         uint256 depositAmount = 100 * 10 ** 18;
 
         // Mint some tokens to user1
-        token.mint(user_1, depositAmount);
+        token.mint(user, depositAmount);
 
         // Approve the bridge to spend user1's tokens
-        vm.prank(user_1);
+        vm.prank(user);
         token.approve(address(assetPricer), depositAmount);
 
         // Attempt deposit to zero address should fail
-        vm.prank(user_1);
+        vm.prank(user);
         vm.expectRevert("ZeroXBridge: Invalid user address");
         assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), depositAmount, address(0));
     }
 
     function testETHDepositEvent() public {
         uint256 depositAmount = 1 ether;
-        address depositUser = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
-        vm.deal(depositUser, depositAmount);
+        vm.deal(user, depositAmount);
 
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(depositUser);
-        registerUser(depositUser, starknetPubKey, ethAccountPrivateKey);
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Setup - whitelist the token for deposits
         vm.prank(admin);
@@ -667,56 +564,42 @@ contract ZeroXBridgeL1Test is Test {
 
         bytes32 expectedCommitmentHash = keccak256(
             abi.encodePacked(
-                uint256(ZeroXBridgeL1.AssetType.ETH), address(0), depositAmount, depositUser, uint256(0), block.chainid
+                uint256(ZeroXBridgeL1.AssetType.ETH), address(0), depositAmount, user, uint256(0), block.chainid
             )
         );
 
         vm.expectEmit(true, true, true, true);
-        emit DepositEvent(address(0), ZeroXBridgeL1.AssetType.ETH, depositAmount, depositUser, expectedCommitmentHash);
+        emit DepositEvent(address(0), ZeroXBridgeL1.AssetType.ETH, depositAmount, user, expectedCommitmentHash);
 
-        vm.prank(depositUser);
-        assetPricer.deposit_asset{value: depositAmount}(
-            ZeroXBridgeL1.AssetType.ETH, address(0), depositAmount, depositUser
-        );
+        vm.prank(user);
+        assetPricer.deposit_asset{value: depositAmount}(ZeroXBridgeL1.AssetType.ETH, address(0), depositAmount, user);
     }
 
     function testERC20DepositEvent() public {
         uint256 depositAmount = 100 * 10 ** 18;
-        address depositUser = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
+        token.mint(user, depositAmount);
 
-        token.mint(depositUser, depositAmount);
-
-        uint256 starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        uint256 ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
-
-        vm.prank(depositUser);
-        registerUser(depositUser, starknetPubKey, ethAccountPrivateKey);
+        vm.prank(user);
+        registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
         // Setup - whitelist the token for deposits
         vm.prank(admin);
         assetPricer.registerToken(ZeroXBridgeL1.AssetType.ERC20, address(token));
 
-        vm.prank(depositUser);
+        vm.prank(user);
         token.approve(address(assetPricer), depositAmount);
 
         bytes32 expectedCommitmentHash = keccak256(
             abi.encodePacked(
-                uint256(ZeroXBridgeL1.AssetType.ERC20),
-                address(token),
-                depositAmount,
-                depositUser,
-                uint256(0),
-                block.chainid
+                uint256(ZeroXBridgeL1.AssetType.ERC20), address(token), depositAmount, user, uint256(0), block.chainid
             )
         );
 
         vm.expectEmit(true, true, true, true);
-        emit DepositEvent(
-            address(token), ZeroXBridgeL1.AssetType.ERC20, depositAmount, depositUser, expectedCommitmentHash
-        );
+        emit DepositEvent(address(token), ZeroXBridgeL1.AssetType.ERC20, depositAmount, user, expectedCommitmentHash);
 
-        vm.prank(depositUser);
-        assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), depositAmount, depositUser);
+        vm.prank(user);
+        assetPricer.deposit_asset(ZeroXBridgeL1.AssetType.ERC20, address(token), depositAmount, user);
     }
 
     // tests for verifyStarknetSignature

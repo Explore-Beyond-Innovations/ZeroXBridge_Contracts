@@ -9,18 +9,13 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "forge-std/console.sol";
 import "../utils/ElipticCurve.sol";
-
-interface IGpsStatementVerifier {
-    function verifyProofAndRegister(
-        uint256[] calldata proofParams,
-        uint256[] calldata proof,
-        uint256[] calldata publicInputs,
-        uint256 cairoVerifierId
-    ) external returns (bool);
-}
+import "./ProofRegistry.sol";
 
 contract ZeroXBridgeL1 is Ownable {
     using ECDSA for bytes32;
+
+    // Proof Registry
+    IProofRegistry public proofRegistry;
 
     // Storage variables
     address public admin;
@@ -44,14 +39,11 @@ contract ZeroXBridgeL1 is Ownable {
         bool isRegistered; // Prevent duplicate registration
     }
 
-    // Starknet GPS Statement Verifier interface
-    IGpsStatementVerifier public gpsVerifier;
-
     // Maps Ethereum address to Starknet pub key
     mapping(address => uint256) public userRecord;
 
     // Track verified proofs to prevent replay attacks
-    mapping(bytes32 => bool) public verifiedProofs;
+    mapping(uint256 => bool) public verifiedProofs;
 
     // Track token registry data
     mapping(bytes32 => TokenAssetData) public tokenRegistry;
@@ -100,17 +92,12 @@ contract ZeroXBridgeL1 is Ownable {
     event TokenRegistered(bytes32 indexed assetKey, AssetType assetType, address tokenAddress);
     event UserRegistered(address indexed user, uint256 starknetPubKey);
 
-    constructor(
-        address _gpsVerifier,
-        address _admin,
-        uint256 _cairoVerifierId,
-        address _initialOwner,
-        address _claimableToken
-    ) Ownable(_initialOwner) {
-        gpsVerifier = IGpsStatementVerifier(_gpsVerifier);
-        cairoVerifierId = _cairoVerifierId;
+    constructor(address _admin, address _initialOwner, address _claimableToken, address _proofRegistry)
+        Ownable(_initialOwner)
+    {
         claimableToken = IERC20(_claimableToken);
         admin = _admin;
+        proofRegistry = IProofRegistry(_proofRegistry);
     }
 
     modifier onlyAdmin() {
@@ -207,49 +194,31 @@ contract ZeroXBridgeL1 is Ownable {
 
     /**
      * @dev Processes a burn zkProof from L2 and unlocks equivalent funds for the user
-     * @param proof The zkProof data array
-     * @param user The address that will receive the unlocked funds
-     * @param amount The amount to unlock
-     * @param l2TxId The L2 transaction ID for uniqueness
      * @param commitmentHash The hash of the commitment data that should match proof
+     * @param starknetPubkey The pubkey of address that will receive the unlocked funds
+     * @param amount The amount to unlock
+     * @param blockhash The block hash of L2 transaction for uniqueness
      */
-    function unlock_funds_with_proof(
-        uint256[] calldata proofParams,
-        uint256[] calldata proof,
-        address user,
-        uint256 amount,
-        uint256 l2TxId,
-        bytes32 commitmentHash
-    ) external {
+    function unlock_funds_with_proof(uint256 commitmentHash, uint256 starknetPubKey, uint256 amount, uint256 blockhash)
+        external
+    {
         require(approvedRelayers[msg.sender], "ZeroXBridge: Only approved relayers can submit proofs");
 
         // Verify that commitmentHash matches expected format based on L2 standards
-        bytes32 expectedCommitmentHash =
-            keccak256(abi.encodePacked(uint256(uint160(user)), amount, l2TxId, block.chainid));
+        uint256 expectedCommitmentHash = uint256(keccak256(abi.encodePacked(starknetPubKey, amount, blockhash)));
 
         require(commitmentHash == expectedCommitmentHash, "ZeroXBridge: Invalid commitment hash");
 
-        // Create the public inputs array with all verification parameters
-        uint256[] memory publicInputs = new uint256[](4);
-        publicInputs[0] = uint256(uint160(user));
-        publicInputs[1] = amount;
-        publicInputs[2] = l2TxId;
-        publicInputs[3] = uint256(commitmentHash);
+        // Check proof registry for verified root
+        uint256 verifiedRoot = proofRegistry.getVerifiedMerkleRoot(commitmentHash);
 
-        // Check that this proof hasn't been used before
-        bytes32 proofHash = keccak256(abi.encodePacked(proof));
-        require(!verifiedProofs[proofHash], "ZeroXBridge: Proof has already been used");
+        // assert root hasn't been used
+        require(!verifiedProofs[verifiedRoot], "ZeroXBridge: Proof has already been used");
 
-        // Verify the proof using Starknet's verifier
-        bool isValid = gpsVerifier.verifyProofAndRegister(proofParams, proof, publicInputs, cairoVerifierId);
-
-        require(isValid, "ZeroXBridge: Invalid proof");
-
-        require(!verifiedProofs[commitmentHash], "ZeroXBridge: Commitment already processed");
-        verifiedProofs[commitmentHash] = true;
+        // pass verified root into merkle manager
 
         // Store the proof hash to prevent replay attacks
-        verifiedProofs[proofHash] = true;
+        verifiedProofs[verifiedRoot] = true;
 
         claimableFunds[user] += amount;
 
@@ -270,17 +239,6 @@ contract ZeroXBridgeL1 is Ownable {
         // Transfer full amount to user
         claimableToken.safeTransfer(msg.sender, amount);
         emit ClaimEvent(msg.sender, amount);
-    }
-
-    // Function to update the GPS verifier address if needed
-    function updateGpsVerifier(address _newVerifier) external onlyOwner {
-        require(_newVerifier != address(0), "ZeroXBridge: Invalid address");
-        gpsVerifier = IGpsStatementVerifier(_newVerifier);
-    }
-
-    // Function to update the Cairo verifier ID if needed
-    function updateCairoVerifierId(uint256 _newVerifierId) external onlyOwner {
-        cairoVerifierId = _newVerifierId;
     }
 
     function whitelistToken(address _token) public onlyAdmin {
