@@ -5,10 +5,7 @@ import "forge-std/Test.sol";
 import "forge-std/console.sol";
 import {ZeroXBridgeL1} from "../src/ZeroXBridgeL1.sol";
 import {MockProofRegistry} from "./mocks/MockProofRegistry.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-import {Starknet} from "../utils/Starknet.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
 contract ZeroXBridgeTest is Test {
@@ -28,17 +25,15 @@ contract ZeroXBridgeTest is Test {
     uint256 public amount;
     uint256 public starknetPubKey;
     uint256 public commitmentHash;
-    uint256 public ethAccountPrivateKey;
     uint256 public blockHash;
+    uint256 public nonce;
 
     address public user2 = address(0x3);
     address public relayer = address(0x4);
     address public nonRelayer = address(0x5);
 
     event FundsUnlocked(address indexed user, uint256 amount, uint256 commitmentHash);
-
     event RelayerStatusChanged(address indexed relayer, bool status);
-
     event ClaimEvent(address indexed user, uint256 amount);
 
     error OwnableUnauthorizedAccount(address account);
@@ -48,27 +43,24 @@ contract ZeroXBridgeTest is Test {
         proofRegistry = new MockProofRegistry();
 
         vm.startPrank(owner);
-        // Deploy the bridge contract
         bridge = new ZeroXBridgeL1(admin, owner, address(proofRegistry));
-
-        // Setup approved relayer
         bridge.setRelayerStatus(relayer, true);
-
         vm.stopPrank();
 
-        // Create a dummy commitment hash for tests involving unlock_funds_with_proof
+        // User details
         user = 0xfc36a8C3f3FEC3217fa8bba11d2d5134e0354316;
         amount = 100 ether;
         starknetPubKey = 0x06ee7c7a561ae5c39e3a2866e8e208ed8ebe45da686e2929622102c80834b771;
-        ethAccountPrivateKey = 0x0b97274c3a8422119bc974361f370a03d022745a3be21c621b26226b2d6faf3a;
         blockHash = 0x0123456;
-        commitmentHash = uint256(keccak256(abi.encodePacked(starknetPubKey, amount, blockHash)));
+        nonce = 1;
+
+        // Mocked Pedersen hash value (replace with actual value from Cairo if needed)
+        commitmentHash = 0x1abcde;
 
         // Deploy mock ERC20 tokens
-        dai = new MockERC20(18); // DAI with 18 decimals
-        usdc = new MockERC20(6); // USDC with 6 decimals
+        dai = new MockERC20(18);
+        usdc = new MockERC20(6);
 
-        // Assign mock price feed addresses
         ethPriceFeed = address(1);
         daiPriceFeed = address(2);
         usdcPriceFeed = address(3);
@@ -77,11 +69,41 @@ contract ZeroXBridgeTest is Test {
         bridge.registerToken(ZeroXBridgeL1.AssetType.ETH, address(0), ethPriceFeed, 18);
         bridge.registerToken(ZeroXBridgeL1.AssetType.ERC20, address(usdc), usdcPriceFeed, 6);
         bridge.registerToken(ZeroXBridgeL1.AssetType.ERC20, address(dai), daiPriceFeed, 18);
-
         vm.stopPrank();
     }
 
-    // Tests for Claim with Proofs
-    // ========================
-    // Todo
+    function testUnlockFundsWithValidProof() public {
+        // Register the fact in the mock proof registry
+        proofRegistry.setProof(commitmentHash);
+
+        vm.prank(relayer);
+        bridge.unlockFundsWithProof(user, amount, starknetPubKey, blockHash, nonce);
+
+        // If you want, verify event emission
+        // (Forge auto-detects emitted events for assertions)
+    }
+
+    function testFailUnlockFundsWithInvalidRelayer() public {
+        proofRegistry.setProof(commitmentHash);
+
+        vm.prank(nonRelayer);
+        bridge.unlockFundsWithProof(user, amount, starknetPubKey, blockHash, nonce);
+    }
+
+    function testFailUnlockFundsWithUnregisteredProof() public {
+        vm.prank(relayer);
+        bridge.unlockFundsWithProof(user, amount, starknetPubKey, blockHash, nonce);
+    }
+
+    function testFailUnlockFundsWithUsedNonce() public {
+        proofRegistry.setProof(commitmentHash);
+
+        // First unlock succeeds
+        vm.prank(relayer);
+        bridge.unlockFundsWithProof(user, amount, starknetPubKey, blockHash, nonce);
+
+        // Attempt re-use of nonce should fail
+        vm.prank(relayer);
+        bridge.unlockFundsWithProof(user, amount, starknetPubKey, blockHash, nonce);
+    }
 }

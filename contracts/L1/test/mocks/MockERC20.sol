@@ -7,10 +7,17 @@ contract MockERC20 is IERC20 {
     mapping(address => uint256) public override balanceOf;
     mapping(address => mapping(address => uint256)) public override allowance;
     uint256 public override totalSupply;
+
+    string public name = "Mock Token";
+    string public symbol = "MOCK";
     uint8 public decimals;
 
     constructor(uint8 _decimals) {
         decimals = _decimals;
+    }
+
+    function decimals() public view returns (uint8) {
+        return decimals;
     }
 
     function mint(address to, uint256 amount) external {
@@ -38,12 +45,4 @@ contract MockERC20 is IERC20 {
         allowance[from][msg.sender] -= value;
         return true;
     }
-
-    // function allowance(address owner, address spender) external view override returns (uint256) {
-    //     return allowance[owner][spender];
-    // }
-
-    // function totalSupply() external view override returns (uint256) {
-    //     return totalSupply;
-    // }
 }
