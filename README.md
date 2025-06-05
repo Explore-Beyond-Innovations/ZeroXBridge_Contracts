@@ -132,3 +132,20 @@ We welcome PRs and ideas! Please fork the repo and submit pull requests to the r
 ## 📜 License
 
 MIT License © ZeroXBridge Contributors
+
+
+
+
+Replaced keccak256 with Pedersen-style hash (compatible with Cairo's hash logic)
+Updated commitment hash structure to include starknetPubKey, amount, blockHash, and nonce
+Added nonce tracking in ZeroXBridgeL1 to prevent replay attacks
+ Integrated IProofRegistry interface to verify withdrawal proofs and merkle roots
+Updated unlockFundsWithProof flow to check proof validity before releasing funds
+Enhanced ZeroXBridgeTest with tests for:
+Valid proof unlocking
+Invalid relayer access
+Reused nonce rejection
+Unregistered proof handling
+Extended MockProofRegistry to simulate verified proof registration
+ Minor adjustments to MockERC20 (no logic changes)
+Ensures L1 contract verifies data from L2 bridge correctly
