@@ -1,0 +1,34 @@
+{
+  "ProofRegistry": {
+    "address": "0x2d55767c6dadedb374237d1080f864c7883d98ed39005441bba2bf1dab30c65",
+    "classHash": "0x01bbe0bd0a7ff088497b3ae3de5d777b32df7941774eed4a433a87d30545f8d7",
+    "declareTx": "already_declared",
+    "deploymentTx": "0x236007d86c40cb02dd2640d2ac93ea34724818d9cdb6463a76e58afcdfe232",
+    "timestamp": 1751003276417,
+    "network": "sepolia"
+  },
+  "L2Oracle": {
+    "address": "0x552753fccbc71a1d0e7d0295a436fed27535b178c8da4f434f8186ce7df5c39",
+    "classHash": "0x033549e7e600899a8521a0ecee3ccce0a258247436fc1e6f69388ca18ebf09f0",
+    "declareTx": "already_declared",
+    "deploymentTx": "0x60c8d188f59e8fe813c729d498425aec3bf34106868578d006de60876815b02",
+    "timestamp": 1751003301250,
+    "network": "sepolia"
+  },
+  "xZBERC20": {
+    "address": "0x4a011be1a7eb09902ba495b2bfb46e82e1013a00bd8bb47a0c05856c5aab602",
+    "classHash": "0x68ca653cc333c61a7f3b88fd203d1f5cc47b2dd7996a6398b4eea8c4bd99df2",
+    "declareTx": "0x22c1f9f9514b8ee5e44d43499784dcac3ed30e4be231e9d2f76f1db931c89b6",
+    "deploymentTx": "0x67b0d1146b96c80e980e80626e7d55198ff2d8a2018c6b7e215d523780fb667",
+    "timestamp": 1751003344209,
+    "network": "sepolia"
+  },
+  "ZeroXBridgeL2": {
+    "address": "0x63ec02e40fc049b762a6a71f28fd99e744746743c44fc864a763b0398eea127",
+    "classHash": "0x0108af8d915a1576e9c5206285cce22db400f95783602705e664c4485b8237d7",
+    "declareTx": "already_declared",
+    "deploymentTx": "0x7e02cfd98ba3ba4e23630fa63ecdad331fb65d97ab4b4c3bf005e6890c5c192",
+    "timestamp": 1751005151931,
+    "network": "sepolia"
+  }
+}

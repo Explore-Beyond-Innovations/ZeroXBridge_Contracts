@@ -2,3 +2,4 @@ target
 .snfoundry_cache/
 .tool-versions
 node_modules
+.env

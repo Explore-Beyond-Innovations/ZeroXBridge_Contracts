@@ -7,13 +7,25 @@
     "test": "tests"
   },
   "scripts": {
-    "gen-signature": "npx esrun scripts/sign.ts",
+    "gen-signature": "npx ts-node scripts/sign.ts",
+    "deploy": "npx ts-node scripts/deploy_l2.ts deploy",
+    "deploy:testnet": "npx ts-node scripts/deploy_l2.ts deploy-testnet",
+    "deploy:devnet": "npx ts-node scripts/deploy_l2.ts deploy-devnet",
+    "deploy:validate": "npx ts-node scripts/validate_setup.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "commander": "^14.0.0",
+    "dotenv": "^16.5.0",
     "ethers": "^6.14.3",
+    "ora": "^8.2.0",
     "starknet": "^6.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
   }
 }
