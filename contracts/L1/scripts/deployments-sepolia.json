@@ -1,0 +1,26 @@
+{
+  "ProofRegistry": {
+    "address": "0x276352e7bff59ce5455a8f33378060dcf3f56b15",
+    "deploymentTx": "0x5bff451d03b84715b665185544d305a5b289f3c919b3434d266ce7ef1930e8eb",
+    "timestamp": 1751232058374,
+    "network": "sepolia"
+  },
+  "MerkleManager": {
+    "address": "0x923aac3fea9e32f7823d09b138120b2edcd92baf",
+    "deploymentTx": "0xabf2740cdb51eb43891ac2a45d7db8157aecece3b28a7292b84493c503ef0665",
+    "timestamp": 1751232082978,
+    "network": "sepolia"
+  },
+  "MerkleStateManager": {
+    "address": "0xa04fb80117543b3be99479bd57d2a8983594cef2",
+    "deploymentTx": "0x6ce0f9fc6981a702a05bf78726b1660276912bc711346aeaf347f0b837cfa736",
+    "timestamp": 1751232107915,
+    "network": "sepolia"
+  },
+  "ZeroXBridgeL1": {
+    "address": "0x3f39e6318c1657363b61ab4db74fe6e904b1a60d",
+    "deploymentTx": "0x04e22c163ccb9f55918ebeefc6aad8b995a7b568cad0313aa6e4bbea105353dd",
+    "timestamp": 1751232150191,
+    "network": "sepolia"
+  }
+}

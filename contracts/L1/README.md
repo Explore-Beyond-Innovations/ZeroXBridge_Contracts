@@ -1,4 +1,6 @@
-# L1 Contracts
+# ZeroXBridge L1 Contracts
+
+This directory contains the Ethereum L1 contracts for the ZeroXBridge protocol.
 
 ## Deployed (SEPOLIA)
 
@@ -49,12 +51,6 @@ $ forge snapshot
 $ anvil
 ```
 
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
 ### Cast
 
 ```shell
@@ -67,4 +63,51 @@ $ cast <subcommand>
 $ forge --help
 $ anvil --help
 $ cast --help
+
+## Setup
+
+1. Install dependencies:
+```bash
+npm install
 ```
+
+2. Create a `.env` file with the following variables:
+```env
+# Required for all networks
+PRIVATE_KEY=0xyour_private_key_here # Append 0x before your PRIVATE KEY
+OWNER_ADDRESS=owner_address_here
+ADMIN_ADDRESS=admin_address_here
+ALCHEMY_API_KEY=your_api_key  # Network-specific API KEY
+```
+
+## Deployment
+
+The deployment script supports three networks:
+- Mainnet
+- Sepolia (testnet)
+- Anvil (local)
+
+### Commands
+
+1. Deploy to mainnet:
+```bash
+npm run deploy
+```
+
+2. Deploy to Sepolia testnet:
+```bash
+npm run deploy:testnet
+```
+
+3. Deploy to local Anvil network:
+```bash
+npm run deploy:anvil
+```
+
+### Contract Deployment Order
+
+The contracts are deployed in the following order:
+1. ProofRegistry
+2. MerkleManager
+3. MerkleStateManager
+4. ZeroXBridgeL1
