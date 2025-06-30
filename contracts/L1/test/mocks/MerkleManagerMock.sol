@@ -22,7 +22,7 @@ contract MerkleMockManager is MerkleManager {
      * Updates peaks, root, and mappings for each. Emits DepositHashAppended for each.
      * @param commitmentHashes Array of deposit commitment hashes to append.
      */
-    function multiAppendDepositHashPublic(bytes32[] memory commitmentHashes) internal {
+    function multiAppendDepositHashPublic(bytes32[] memory commitmentHashes) public {
         multiAppendDepositHash(commitmentHashes);
     }
 }

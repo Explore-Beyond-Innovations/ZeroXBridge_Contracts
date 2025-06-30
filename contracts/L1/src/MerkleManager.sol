@@ -55,9 +55,10 @@ contract MerkleManager {
         nodeIndexToRoot[nextElementsCount] = lastRoot;
         nodeIndexToPeaks[nextElementsCount] = lastPeaks;
 
-        // Increment leaves count and map commitment hash to its index
+        // Map commitment hash to its correct MMR leaf index
+        uint256 mmrLeafIndex = leafCountToMmrIndex(leavesCount);
+        commitmentHashToIndex[commitmentHash] = mmrLeafIndex;
         leavesCount += 1;
-        commitmentHashToIndex[commitmentHash] = leavesCount;
 
         // Emit event for the appended deposit
         emit DepositHashAppended(leavesCount, commitmentHash, lastRoot, lastElementsCount);
@@ -79,9 +80,12 @@ contract MerkleManager {
             (nextElementsCount, nextRoot, nextPeaks) =
                 StatelessMmr.appendWithPeaksRetrieval(commitmentHashes[i], nextPeaks, nextElementsCount, nextRoot);
 
-            // Increment leaves count and map commitment hash to its index
+            uint256 mmrLeafIndex = leafCountToMmrIndex(leavesCount);
+
+            // Map commitment hash to its correct MMR leaf index
+            commitmentHashToIndex[commitmentHashes[i]] = mmrLeafIndex;
+
             leavesCount += 1;
-            commitmentHashToIndex[commitmentHashes[i]] = leavesCount;
 
             // Emit event for each appended deposit
             emit DepositHashAppended(leavesCount, commitmentHashes[i], lastRoot, lastElementsCount);
@@ -148,5 +152,25 @@ contract MerkleManager {
     ) external pure {
         // Verify the proof using StatelessMmr
         StatelessMmr.verifyProof(index, value, proof, peaks, elementsCount, root);
+    }
+
+    /**
+     * @dev Converts a leaf count (0-based) to the actual MMR leaf index
+     * @param leafCount The sequential leaf number (0, 1, 2, 3...)
+     * @return The actual MMR index where this leaf is positioned
+     */
+    function leafCountToMmrIndex(uint256 leafCount) internal pure returns (uint256) {
+        if (leafCount == 0) return 0;
+
+        // Calculate the number of internal nodes before this leaf
+        uint256 internalNodes = 0;
+        uint256 temp = leafCount;
+
+        while (temp > 0) {
+            temp >>= 1;
+            internalNodes += temp;
+        }
+
+        return leafCount + internalNodes;
     }
 }
