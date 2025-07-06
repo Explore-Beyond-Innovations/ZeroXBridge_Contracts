@@ -68,8 +68,8 @@ pub mod ZeroXBridgeL2 {
         verified_roots: Map<felt252, felt252>,
         burn_nonce: Map<ContractAddress, felt252>,
         rates: Rates,
-        // Merkle Manager Storage
-        mmr: MMR,
+        mmr_root: felt252,
+        mmr_last_pos: felt252,
         node_index_to_root: Map<usize, felt252>,
         commitment_hash_to_index: Map<felt252, felt252>,
         last_peaks: Vec<felt252>,
@@ -175,8 +175,9 @@ pub mod ZeroXBridgeL2 {
         self.oracle_address.write(oracle_address);
         let rates = Rates { min_rate, max_rate };
         self.rates.write(rates);
-        let mmr: MMR = Default::default();
-        self.mmr.write(mmr);
+        self.mmr_root.write(0);
+        self.mmr_last_pos.write(0);
+        self.leaves_count.write(0);
     }
 
     #[abi(embed_v0)]
@@ -386,13 +387,11 @@ pub mod ZeroXBridgeL2 {
     #[abi(embed_v0)]
     impl MerkleImpl of IMerkleManager<ContractState> {
         fn get_root_hash(self: @ContractState) -> felt252 {
-            let mmr = self.mmr.read();
-            mmr.root
+            self.mmr_root.read()
         }
 
         fn get_element_count(self: @ContractState) -> felt252 {
-            let mmr = self.mmr.read();
-            mmr.last_pos.into()
+            self.mmr_last_pos.read()
         }
 
         fn get_commitment_index(self: @ContractState, commitment_hash: felt252) -> felt252 {
@@ -420,26 +419,38 @@ pub mod ZeroXBridgeL2 {
             peaks: Array<felt252>,
             proof: Array<felt252>,
         ) -> Result<bool, felt252> {
-            let mmr = self.mmr.read();
-            mmr.verify_proof(index, commitment_hash, peaks.span(), proof.span())
+            let mut mmr: MMR = Default::default();
+            mmr.root = self.mmr_root.read();
+            mmr.last_pos = self.mmr_last_pos.read().try_into().unwrap();
+            
+            MMRTrait::verify_proof(@mmr, index, commitment_hash, peaks.span(), proof.span())
         }
     }
 
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
         fn append_withdrawal_hash(ref self: ContractState, commitment_hash: felt252) {
-            let mut mmr = self.mmr.read();
-            let last_peaks = self.get_last_peaks().span();
+            let mut mmr: MMR = Default::default();
+            mmr.root = self.mmr_root.read();
+            mmr.last_pos = self.mmr_last_pos.read().try_into().unwrap();
+            
+            let last_peaks = self.get_last_peaks();
             let mut leaves_count = self.leaves_count.read();
 
-            match mmr.append(commitment_hash, last_peaks) {
+            match MMRTrait::append(ref mmr, commitment_hash, last_peaks.span()) {
                 Result::Ok((
                     root_hash, peaks,
                 )) => {
+                    // Store the new root and last position
+                    self.mmr_root.write(root_hash);
+                    self.mmr_last_pos.write(mmr.last_pos.into());
                     self.node_index_to_root.write(mmr.last_pos, root_hash);
+                    
+                    // Calculate the correct MMR leaf index using the helper function
+                    let correct_leaf_index = Self::leaf_count_to_mmr_index(leaves_count);
+                    self.commitment_hash_to_index.write(commitment_hash, correct_leaf_index);
+                    
                     leaves_count += 1;
-
-                    self.commitment_hash_to_index.write(commitment_hash, mmr.last_pos.into());
                     self.leaves_count.write(leaves_count);
 
                     let last_peaks_len = last_peaks.len();
@@ -470,17 +481,32 @@ pub mod ZeroXBridgeL2 {
                         .emit(
                             Event::WithdrawalHashAppended(
                                 WithdrawalHashAppended {
-                                    index: mmr.last_pos.into(),
+                                    index: correct_leaf_index,
                                     commitment_hash: commitment_hash,
-                                    root_hash: mmr.root,
+                                    root_hash: root_hash,
                                 },
                             ),
                         );
-
-                    self.mmr.write(mmr);
                 },
                 Result::Err(err) => { panic(array![err]) },
             }
+        }
+
+        fn leaf_count_to_mmr_index(leaf_count: felt252) -> felt252 {
+            if leaf_count == 0 {
+                return 0;
+            }
+
+            // Convert to u64 for arithmetic operations
+            let mut internal_nodes: u64 = 0;
+            let mut temp: u64 = leaf_count.try_into().unwrap();
+
+            while temp > 0 {
+                temp = temp / 2; // Right shift equivalent for division by 2
+                internal_nodes += temp;
+            };
+
+            leaf_count + internal_nodes.into()
         }
     }
 }
