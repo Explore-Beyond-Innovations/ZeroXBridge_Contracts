@@ -3,6 +3,11 @@
 **ZeroXBridge** is a cross-chain liquidity protocol designed to enable secure asset locking on Ethereum (L1) and pegged liquidity minting on Starknet (L2) using Zero-Knowledge proofs. This repository houses the L1 and L2 smart contracts that power the core bridging functionality, xZB token economics, oracle updates, and dynamic protocol configurations.
 
 ---
+📌 **Full Roadmap:**  
+👉 [Explore-Beyond-Innovations/ZeroXBridge-Roadmap](https://github.com/Explore-Beyond-Innovations/ZeroXBridge-Roadmap)
+
+Stay tuned for updates!
+---
 
 ## 📁 Directory Structure
 
