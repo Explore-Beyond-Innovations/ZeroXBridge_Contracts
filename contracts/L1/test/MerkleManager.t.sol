@@ -26,14 +26,13 @@ contract MerkleManagerTest is Test {
         bytes32[] memory peaks = new bytes32[](0);
 
         // Append the first deposit
-        console.log("Adding element 1");
+        // console.log("Adding element 1");
         merkleManager.appendDepositHashPublic(bytes32(uint256(1)));
         logPeaks();
 
         // Compute the expected node hash for the first element
         // hash(index, value)
-        bytes32 node1 = keccak256(abi.encode(uint256(1), bytes32(uint256(1))));
-        peaks = StatelessMmrHelpers.newArrWithElem(peaks, node1);
+        peaks = StatelessMmrHelpers.newArrWithElem(peaks, bytes32(uint256(1)));
 
         // Verify the proof for the first element
         StatelessMmr.verifyProof(
@@ -46,13 +45,13 @@ contract MerkleManagerTest is Test {
         );
 
         // Append the second deposit
-        console.log("Adding element 2");
+        // console.log("Adding element 2");
         merkleManager.appendDepositHashPublic(bytes32(uint256(2)));
         logPeaks();
 
         // Prepare proof for the second element
         bytes32[] memory proof = new bytes32[](0);
-        proof = StatelessMmrHelpers.newArrWithElem(proof, node1);
+        proof = StatelessMmrHelpers.newArrWithElem(proof, bytes32(uint256(1)));
 
         // Verify the proof for the second element
         StatelessMmr.verifyProof(
@@ -67,8 +66,7 @@ contract MerkleManagerTest is Test {
         // Verify previous element with new peaks and root hash
         bytes32[] memory proof2 = new bytes32[](0);
         // hash(index, value)
-        bytes32 node2 = keccak256(abi.encode(uint256(2), bytes32(uint256(2))));
-        proof2 = StatelessMmrHelpers.newArrWithElem(proof2, node2);
+        proof2 = StatelessMmrHelpers.newArrWithElem(proof2, bytes32(uint256(2)));
 
         StatelessMmr.verifyProof(
             1, // index
@@ -134,7 +132,7 @@ contract MerkleManagerTest is Test {
 
         for (uint256 i = 0; i < 4; i++) {
             uint256 storedIndex = merkleManager.getCommitmentIndex(batchCommitments[i]);
-            console.log("Batch leaf", i, "stored at MMR index:", storedIndex);
+            // console.log("Batch leaf", i, "stored at MMR index:", storedIndex);
 
             assertEq(storedIndex, expectedBatchIndices[i], "Wrong MMR index in batch append");
         }
@@ -169,7 +167,7 @@ contract MerkleManagerTest is Test {
         assertEq(merkleManager.getCommitmentIndex(batch[0]), 4, "batch1 wrong index");
         assertEq(merkleManager.getCommitmentIndex(batch[1]), 5, "batch2 wrong index");
 
-        console.log(" Mixed append maintains correct MMR indices");
+        // console.log(" Mixed append maintains correct MMR indices");
     }
 
     /// @notice Test that uncommitted hashes return index 1 (default)
@@ -192,9 +190,9 @@ contract MerkleManagerTest is Test {
     /// @notice Logs the current peaks of the Merkle tree
     function logPeaks() internal view {
         bytes32[] memory peaks = merkleManager.getLastPeaks();
-        console.log("Current Peaks:");
+        // console.log("Current Peaks:");
         for (uint256 i = 0; i < peaks.length; i++) {
-            console.logBytes32(peaks[i]);
+            // console.logBytes32(peaks[i]);
         }
     }
 }

@@ -7,7 +7,7 @@ optimizer_runs = 200
 
 remappings = [
   "@openzeppelin/=lib/openzeppelin-contracts/",
-  "@soliditymmr/=lib/solidity-mmr/",
+  "@soliditymmr/=lib/solidity-mmr.git/",
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

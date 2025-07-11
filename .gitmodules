@@ -7,6 +7,6 @@
 [submodule "contracts/L1/lib/chainlink"]
 	path = contracts/L1/lib/chainlink
 	url = https://github.com/smartcontractkit/chainlink
-[submodule "contracts/L1/lib/solidity-mmr"]
-	path = contracts/L1/lib/solidity-mmr
-	url = https://github.com/HerodotusDev/solidity-mmr
+[submodule "contracts/L1/lib/solidity-mmr.git"]
+	path = contracts/L1/lib/solidity-mmr.git
+	url = https://github.com/Explore-Beyond-Innovations/solidity-mmr.git
