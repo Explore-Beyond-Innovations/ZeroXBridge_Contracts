@@ -17,7 +17,7 @@ cairo_lib = { git = "https://github.com/HerodotusDev/cairo-lib.git" }
 [dev-dependencies]
 assert_macros = "2.9.2"
 openzeppelin_utils = "0.20.0"
-snforge_std = "0.36.0"
+snforge_std = "0.44.0"
 
 [[target.starknet-contract]]
 sierra = true
