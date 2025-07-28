@@ -72,7 +72,15 @@ contract ZeroXBridgeL1 is Ownable, Starknet, MerkleManager {
     event WhitelistEvent(address indexed token);
     event DewhitelistEvent(address indexed token);
     event DepositEvent(
-        address indexed token, AssetType assetType, uint256 amount, address indexed user, uint256 commitmentHash
+        uint256 depositId,
+        address indexed token,
+        AssetType assetType,
+        uint256 amount,
+        address indexed user,
+        uint256 nonce,
+        uint256 commitmentHash,
+        bytes32 newRoot,
+        uint256 elementCount
     );
     event TokenRegistered(bytes32 indexed assetKey, AssetType assetType, address tokenAddress);
     event UserRegistered(address indexed user, uint256 starknetPubKey);
@@ -182,7 +190,7 @@ contract ZeroXBridgeL1 is Ownable, Starknet, MerkleManager {
      * @param user The address that will receive the bridged tokens on L2
      * @return commitmentHash Returns the generated commitment hash for verification on L2
      */
-    function depositAsset(AssetType assetType, address tokenAddress, uint256 amount, address user)
+    function depositAsset(uint256 depositId, AssetType assetType, address tokenAddress, uint256 amount, address user)
         external
         payable
         returns (uint256)
@@ -228,13 +236,16 @@ contract ZeroXBridgeL1 is Ownable, Starknet, MerkleManager {
         nextDepositNonce[user] = nonce + 1;
 
         // Generate commitment hash
-        bytes32 commitmentHash = keccak256(abi.encodePacked(userRecord[user], usdVal, nonce, block.timestamp));
+        bytes32 commitmentHash =
+            keccak256(abi.encodePacked(depositId, userRecord[user], usdVal, nonce, block.timestamp));
 
         // Append to Merkle tree
-        appendDepositHash(commitmentHash);
+        (bytes32 newRoot, uint256 count, uint256 elementCount) = appendDepositHash(commitmentHash);
 
         // Emit deposit event
-        emit DepositEvent(tokenAddress, assetType, usdVal, user, uint256(commitmentHash));
+        emit DepositEvent(
+            depositId, tokenAddress, assetType, usdVal, user, nonce, uint256(commitmentHash), newRoot, elementCount
+        );
 
         return uint256(commitmentHash);
     }

@@ -42,8 +42,14 @@ contract MerkleManager {
      * @dev Appends a new deposit commitment to the tree.
      * Updates peaks, root, and mappings. Emits DepositHashAppended.
      * @param commitmentHash The hash of the deposit commitment to append.
+     * @return newRoot The updated MMR root hash after the commitment is appended.
+     * @return newLeavesCount The total number of deposit leaves after this append operation.
+     * @return elementCount The total number of elements in the MMR after this append operation (including non-leaf nodes).
      */
-    function appendDepositHash(bytes32 commitmentHash) internal {
+    function appendDepositHash(bytes32 commitmentHash)
+        internal
+        returns (bytes32 newRoot, uint256 newLeavesCount, uint256 elementCount)
+    {
         // Append element to the tree and retrieve updated peaks and root
         (uint256 nextElementsCount, bytes32 nextRootHash, bytes32[] memory nextPeaks) =
             StatelessMmr.appendWithPeaksRetrieval(commitmentHash, lastPeaks, lastElementsCount, lastRoot);
@@ -59,9 +65,9 @@ contract MerkleManager {
         uint256 mmrLeafIndex = leafCountToMmrIndex(leavesCount);
         commitmentHashToIndex[commitmentHash] = mmrLeafIndex + 1; // +1 to make it 1-based index
         leavesCount += 1;
-
-        // Emit event for the appended deposit
-        emit DepositHashAppended(leavesCount, commitmentHash, lastRoot, lastElementsCount);
+        newRoot = lastRoot;
+        newLeavesCount = leavesCount;
+        elementCount = lastElementsCount;
     }
 
     /**

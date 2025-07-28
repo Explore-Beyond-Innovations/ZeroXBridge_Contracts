@@ -11,6 +11,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {console} from "forge-std/console.sol";
+import "../src/MerkleManager.sol";
 
 // // Test contract for bridge
 contract ZeroXBridgeL1Test is Test {
@@ -40,11 +41,15 @@ contract ZeroXBridgeL1Test is Test {
     event RelayerStatusChanged(address indexed relayer, bool status);
 
     event DepositEvent(
+        uint256 depositId,
         address indexed token,
         ZeroXBridgeL1.AssetType assetType,
         uint256 amount,
         address indexed user,
-        uint256 commitmentHash
+        uint256 nonce,
+        uint256 commitmentHash,
+        bytes32 newRoot,
+        uint256 elementCount
     );
 
     event TokenReserveUpdated(address indexed token, uint256 newReserve);
@@ -304,10 +309,12 @@ contract ZeroXBridgeL1Test is Test {
         );
 
         uint256 usdValue = depositAmount * ethPrice * 1e18 / 1e18;
+        uint256 depositId = 1;
 
         uint256 expectedCommitmentHash = uint256(
             keccak256(
                 abi.encodePacked(
+                    depositId,
                     starknetPubKey,
                     usdValue,
                     uint256(0), // nonce is 0 for first deposit
@@ -318,8 +325,10 @@ contract ZeroXBridgeL1Test is Test {
 
         // Make the deposit as user1
         vm.prank(user);
-        uint256 returnedHash =
-            bridge.depositAsset{value: depositAmount}(ZeroXBridgeL1.AssetType.ETH, address(0), depositAmount, user);
+
+        uint256 returnedHash = bridge.depositAsset{value: depositAmount}(
+            depositId, ZeroXBridgeL1.AssetType.ETH, address(0), depositAmount, user
+        );
 
         // Verify the correct hash was returned
         assertEq(returnedHash, expectedCommitmentHash, "Commitment hash should match expected");
@@ -356,10 +365,12 @@ contract ZeroXBridgeL1Test is Test {
         );
 
         uint256 usdValue = depositAmount * daiPrice * 1e18 / 1e18;
+        uint256 depositId = 1;
 
         uint256 expectedCommitmentHash = uint256(
             keccak256(
                 abi.encodePacked(
+                    depositId,
                     starknetPubKey,
                     usdValue,
                     uint256(0), // nonce is 0 for first deposit
@@ -369,7 +380,8 @@ contract ZeroXBridgeL1Test is Test {
         );
 
         vm.prank(user);
-        uint256 commitmentHash_ = bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(dai), depositAmount, user);
+        uint256 commitmentHash_ =
+            bridge.depositAsset(depositId, ZeroXBridgeL1.AssetType.ERC20, address(dai), depositAmount, user);
 
         assertEq(commitmentHash_, expectedCommitmentHash);
         assertEq(bridge.userDeposits(address(dai), user), depositAmount);
@@ -400,7 +412,10 @@ contract ZeroXBridgeL1Test is Test {
 
         // First deposit
         vm.prank(user);
-        uint256 hash1 = bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(usdc), depositAmount, user);
+        uint256 depositId1 = 1;
+
+        uint256 hash1 =
+            bridge.depositAsset(depositId1, ZeroXBridgeL1.AssetType.ERC20, address(usdc), depositAmount, user);
 
         // Mock price feeds
         vm.mockCall(
@@ -411,7 +426,10 @@ contract ZeroXBridgeL1Test is Test {
 
         // Second deposit
         vm.prank(user);
-        uint256 hash2 = bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(usdc), depositAmount, user);
+        uint256 depositId2 = 2;
+
+        uint256 hash2 =
+            bridge.depositAsset(depositId2, ZeroXBridgeL1.AssetType.ERC20, address(usdc), depositAmount, user);
 
         // Verify hashes are different due to different nonces
         assertTrue(hash1 != hash2, "Commitment hashes should be different");
@@ -430,7 +448,9 @@ contract ZeroXBridgeL1Test is Test {
         // Attempt deposit with zero amount should fail
         vm.prank(user);
         vm.expectRevert("ZeroXBridge: Amount must be greater than zero");
-        bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(usdc), 0, user);
+        uint256 depositId = 1;
+
+        bridge.depositAsset(depositId, ZeroXBridgeL1.AssetType.ERC20, address(usdc), 0, user);
     }
 
     function testCannotDepositToZeroAddress() public {
@@ -449,47 +469,80 @@ contract ZeroXBridgeL1Test is Test {
         // Attempt deposit to zero address should fail
         vm.prank(user);
         vm.expectRevert("ZeroXBridge: Invalid user address");
-        bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(usdc), depositAmount, address(0));
+        uint256 depositId = 1;
+
+        bridge.depositAsset(depositId, ZeroXBridgeL1.AssetType.ERC20, address(usdc), depositAmount, address(0));
+    }
+
+    /**
+     * @dev Helper function to predict the outcome of the MerkleManager's append operation.
+     * It fetches the current MMR state from the bridge and uses the same StatelessMmr
+     * library to calculate the expected next root and element count.
+     */
+    function calculateExpectedMmrValues(bytes32 _commitmentHash)
+        internal
+        view
+        returns (bytes32 expectedNewRoot, uint256 expectedElementCount)
+    {
+        // 1. Get the current state of the MMR from the bridge contract
+        bytes32[] memory currentPeaks = bridge.getLastPeaks();
+        uint256 currentElementsCount = bridge.getElementsCount();
+        bytes32 currentRoot = bridge.getRootHash();
+
+        // 2. Use the same library function to predict the result of the append
+        (uint256 nextElementsCount, bytes32 nextRoot,) =
+            StatelessMmr.appendWithPeaksRetrieval(_commitmentHash, currentPeaks, currentElementsCount, currentRoot);
+
+        // 3. Return the predicted values
+        return (nextRoot, nextElementsCount);
     }
 
     function testETHDepositEvent() public {
         uint256 depositAmount = 1 ether;
+        uint256 depositId = 123;
+        address tokenAddress = address(0);
         vm.deal(user, depositAmount);
 
         vm.prank(user);
         registerUser(user, starknetPubKey, ethAccountPrivateKey);
 
-        uint256 ethPrice = 2000; // 2000 USD
-
-        // Mock price feeds
+        uint256 ethPrice = 2000;
         vm.mockCall(
             ethPriceFeed,
             abi.encodeWithSelector(AggregatorV3Interface.latestRoundData.selector),
-            abi.encode(uint80(1), int256(ethPrice * 10 ** 8), uint256(0), uint256(0), uint80(0))
+            abi.encode(uint80(1), int256(ethPrice * 10 ** 8), 0, 0, 0)
         );
 
-        uint256 usdValue = depositAmount * ethPrice * 1e18 / 1e18;
+        uint256 usdValue = (depositAmount * ethPrice * 1e18) / 1e18;
+        uint256 nonce = bridge.nextDepositNonce(user);
+        bytes32 expectedCommitmentHash =
+            keccak256(abi.encodePacked(depositId, starknetPubKey, usdValue, nonce, block.timestamp));
 
-        uint256 expectedCommitmentHash = uint256(
-            keccak256(
-                abi.encodePacked(
-                    starknetPubKey,
-                    usdValue,
-                    uint256(0), // nonce is 0 for first deposit
-                    block.timestamp
-                )
-            )
+        (bytes32 expectedNewRoot, uint256 expectedElementCount) = calculateExpectedMmrValues(expectedCommitmentHash);
+
+        vm.expectEmit(true, true, false, true);
+        emit DepositEvent(
+            depositId,
+            tokenAddress,
+            ZeroXBridgeL1.AssetType.ETH,
+            usdValue,
+            user,
+            nonce,
+            uint256(expectedCommitmentHash),
+            expectedNewRoot,
+            expectedElementCount
         );
-
-        vm.expectEmit(true, true, true, true);
-        emit DepositEvent(address(0), ZeroXBridgeL1.AssetType.ETH, usdValue, user, expectedCommitmentHash);
 
         vm.prank(user);
-        bridge.depositAsset{value: depositAmount}(ZeroXBridgeL1.AssetType.ETH, address(0), depositAmount, user);
+        bridge.depositAsset{value: depositAmount}(
+            depositId, ZeroXBridgeL1.AssetType.ETH, tokenAddress, depositAmount, user
+        );
     }
 
     function testERC20DepositEvent() public {
-        uint256 depositAmount = 100 * 10 ** 18;
+        uint256 depositAmount = 100 * 1e18;
+        uint256 depositId = 456;
+        address tokenAddress = address(dai);
         dai.mint(user, depositAmount);
 
         vm.prank(user);
@@ -498,33 +551,35 @@ contract ZeroXBridgeL1Test is Test {
         vm.prank(user);
         dai.approve(address(bridge), depositAmount);
 
-        uint256 daiPrice = 1; // 2000 USD
-
-        // Mock price feeds
+        uint256 daiPrice = 1;
         vm.mockCall(
             daiPriceFeed,
             abi.encodeWithSelector(AggregatorV3Interface.latestRoundData.selector),
-            abi.encode(uint80(1), int256(daiPrice * 10 ** 8), uint256(0), uint256(0), uint80(0))
+            abi.encode(uint80(1), int256(daiPrice * 10 ** 8), 0, 0, 0)
         );
 
-        uint256 usdValue = depositAmount * daiPrice * 1e18 / 1e18;
+        uint256 usdValue = (depositAmount * daiPrice * 1e18) / 1e18;
+        uint256 nonce = bridge.nextDepositNonce(user);
+        bytes32 expectedCommitmentHash =
+            keccak256(abi.encodePacked(depositId, starknetPubKey, usdValue, nonce, block.timestamp));
 
-        uint256 expectedCommitmentHash = uint256(
-            keccak256(
-                abi.encodePacked(
-                    starknetPubKey,
-                    usdValue,
-                    uint256(0), // nonce is 0 for first deposit
-                    block.timestamp
-                )
-            )
+        (bytes32 expectedNewRoot, uint256 expectedElementCount) = calculateExpectedMmrValues(expectedCommitmentHash);
+
+        vm.expectEmit(true, true, false, true);
+        emit DepositEvent(
+            depositId,
+            tokenAddress,
+            ZeroXBridgeL1.AssetType.ERC20,
+            usdValue,
+            user,
+            nonce,
+            uint256(expectedCommitmentHash),
+            expectedNewRoot,
+            expectedElementCount
         );
-
-        vm.expectEmit(true, true, true, true);
-        emit DepositEvent(address(dai), ZeroXBridgeL1.AssetType.ERC20, usdValue, user, expectedCommitmentHash);
 
         vm.prank(user);
-        bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(dai), depositAmount, user);
+        bridge.depositAsset(depositId, ZeroXBridgeL1.AssetType.ERC20, tokenAddress, depositAmount, user);
     }
 
     // tests for verifyStarknetSignature
@@ -645,7 +700,9 @@ contract ZeroXBridgeL1Test is Test {
 
         // 2. Deposit ETH
         vm.prank(user);
-        bridge.depositAsset{value: depositEth}(ZeroXBridgeL1.AssetType.ETH, address(0), depositEth, user);
+        uint256 depositId = 1;
+
+        bridge.depositAsset{value: depositEth}(depositId, ZeroXBridgeL1.AssetType.ETH, address(0), depositEth, user);
 
         // Expect TokenReserveUpdated for DAI
         vm.expectEmit(true, false, false, true);
@@ -653,7 +710,9 @@ contract ZeroXBridgeL1Test is Test {
 
         // 3. Deposit DAI
         vm.prank(user);
-        bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(dai), depositDai, user);
+        uint256 depositId1 = 1;
+
+        bridge.depositAsset(depositId1, ZeroXBridgeL1.AssetType.ERC20, address(dai), depositDai, user);
 
         // Expect TokenReserveUpdated for USDC
         vm.expectEmit(true, false, false, true);
@@ -661,7 +720,9 @@ contract ZeroXBridgeL1Test is Test {
 
         // 4. Deposit USDC
         vm.prank(user);
-        bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(usdc), depositUsdc, user);
+        uint256 depositId2 = 2;
+
+        bridge.depositAsset(depositId2, ZeroXBridgeL1.AssetType.ERC20, address(usdc), depositUsdc, user);
 
         // 5. Call updateTvl
         bridge.updateTvl();
@@ -718,7 +779,9 @@ contract ZeroXBridgeL1Test is Test {
 
         // Step 1: Deposit 100 DAI via bridge
         vm.prank(user);
-        bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(dai), depositAmount, user);
+        uint256 depositId = 1;
+
+        bridge.depositAsset(depositId, ZeroXBridgeL1.AssetType.ERC20, address(dai), depositAmount, user);
 
         // Step 2: Manually transfer 50 DAI to bridge (bypasses deposit logic)
         vm.prank(user);
@@ -769,7 +832,9 @@ contract ZeroXBridgeL1Test is Test {
 
         // Deposit 100 DAI through tracked bridge flow
         vm.prank(user);
-        bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(dai), trackedAmount, user);
+        uint256 depositId = 1;
+
+        bridge.depositAsset(depositId, ZeroXBridgeL1.AssetType.ERC20, address(dai), trackedAmount, user);
 
         // Manually send 50 DAI directly to bridge (this bypasses reserve tracking)
         vm.prank(user);
@@ -833,14 +898,16 @@ contract ZeroXBridgeL1Test is Test {
         // Step 3: Warp and deposit
         vm.warp(timestamp);
         vm.prank(user);
-        bridge.depositAsset(ZeroXBridgeL1.AssetType.ERC20, address(dai), depositAmount, user);
+        uint256 depositId = 1;
+
+        bridge.depositAsset(depositId, ZeroXBridgeL1.AssetType.ERC20, address(dai), depositAmount, user);
 
         // Step 4: Compute usdValue and commitmentHash
-        uint256 commitmentHash = uint256(keccak256(abi.encodePacked(starknetPubKey, usdValue, nonce, timestamp)));
+        uint256 commitmentHash_ = uint256(keccak256(abi.encodePacked(starknetPubKey, usdValue, nonce, timestamp)));
 
         // Step 5: Register proof
         uint256 merkleRoot = uint256(keccak256("mock merkle"));
-        MockProofRegistry(address(proofRegistry)).registerWithdrawalProof(commitmentHash, merkleRoot);
+        MockProofRegistry(address(proofRegistry)).registerWithdrawalProof(commitmentHash_, merkleRoot);
 
         // Step 6: Build proof data
         uint256[] memory proofdata = new uint256[](4);
@@ -851,7 +918,7 @@ contract ZeroXBridgeL1Test is Test {
 
         // Step 7: Generate valid signature
         uint256 STARK_CURVE_ORDER = 361850278866613110698659328152149712041468702080126762623304950275186147821;
-        uint256 msgHash = commitmentHash % STARK_CURVE_ORDER;
+        uint256 msgHash = commitmentHash_ % STARK_CURVE_ORDER;
         bytes32 digest = bytes32(msgHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ethAccountPrivateKey, digest);
         bytes memory starknetSig = abi.encodePacked(r, s);
